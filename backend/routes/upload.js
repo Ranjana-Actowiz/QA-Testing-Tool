@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { uploadFile, getUpload, getAllUploads, uploadMiddleware } = require('../controllers/uploadController');
+const { uploadFile, getUpload, getAllUploads } = require('../controllers/uploadController');
+const { uploadMiddleware } = require('../middleware/multer');
 
 /**
  * Wrap multer middleware to handle its errors gracefully and pass them

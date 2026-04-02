@@ -4,24 +4,11 @@
 @tailwind utilities;
 
 @layer base {
-  body { font-family: 'Inter', system-ui, sans-serif; }
+  body { font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"; }
   * { box-sizing: border-box; }
 }
 
 @layer utilities {
-  .text-gradient {
-    background: linear-gradient(135deg, #1e40af, #3b82f6, #0ea5e9);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  .bg-mesh {
-    background-color: #eff6ff;
-    background-image:
-      radial-gradient(at 40% 20%, hsla(213,100%,85%,0.4) 0px, transparent 50%),
-      radial-gradient(at 80% 0%, hsla(220,100%,90%,0.3) 0px, transparent 50%),
-      radial-gradient(at 0% 50%, hsla(215,100%,88%,0.3) 0px, transparent 50%);
-  }
   .card {
     @apply bg-white rounded-2xl shadow-sm border border-slate-100;
   }
@@ -36,12 +23,6 @@
   }
   .btn-danger {
     @apply inline-flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-3 py-2 rounded-lg font-semibold text-sm transition-all duration-200;
-  }
-  .input {
-    @apply w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3F4D67] focus:border-transparent transition-all;
-  }
-  .label {
-    @apply block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5;
   }
   .badge-pass {
     @apply inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full text-xs font-semibold;
@@ -95,17 +76,4 @@
   background: linear-gradient(90deg, #3F4D67 0%, #5a6d87 40%, #3F4D67 100%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
-}
-
-/* Navbar gradient bar animation */
-@keyframes gradientShift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-.navbar-accent-bar {
-  height: 2px;
-  background: linear-gradient(90deg, #3b82f6, #06b6d4, #8b5cf6, #3b82f6);
-  background-size: 300% 100%;
-  animation: gradientShift 4s ease infinite;
 }

@@ -14,15 +14,9 @@ const ErrorDetailSchema = new mongoose.Schema(
 
 const RowResultSchema = new mongoose.Schema(
   {
-    rowIndex: { type: Number },
-    status: {
-      type: String,
-      enum: ['pass', 'fail'],
-    },
-    errors: {
-      type: [ErrorDetailSchema],
-      default: [],
-    },
+    row_number: { type: Number },
+    status: { type: String, enum: ['pass', 'fail'], },
+    errors: { type: [ErrorDetailSchema], default: [], },
   },
   { _id: false }
 );
@@ -39,39 +33,15 @@ const SummaryItemSchema = new mongoose.Schema(
 
 const ValidationReportSchema = new mongoose.Schema(
   {
-    uploadId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Upload',
-      required: true,
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-    totalRows: {
-      type: Number,
-      default: 0,
-    },
-    passedRows: {
-      type: Number,
-      default: 0,
-    },
-    failedRows: {
-      type: Number,
-      default: 0,
-    },
-    rules: {
-      type: mongoose.Schema.Types.Mixed,
-      default: {},
-    },
-    results: {
-      type: [RowResultSchema],
-      default: [],
-    },
-    summary: {
-      type: [SummaryItemSchema],
-      default: [],
-    },
+    uploadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Upload', required: true, },
+    originalName: { type: String, default: '' },
+    createdAt: { type: Date,  default: Date.now,  },
+    totalRows: {  type: Number, default: 0, },
+    passedRows: {  type: Number,  default: 0, },
+    failedRows: { type: Number, default: 0, },
+    rules: { type: mongoose.Schema.Types.Mixed, default: {}, },
+    results: {  type: [RowResultSchema], default: [], },
+    summary: { type: [SummaryItemSchema], default: [],  },
   },
   {
     timestamps: true,

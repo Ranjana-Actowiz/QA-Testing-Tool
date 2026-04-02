@@ -915,7 +915,7 @@ const validateData = (rows, headers, rules) => {
     }
 
     results.push({
-      rowIndex: rowIdx,
+      row_number: rowIdx + 2,
       status: rowErrors.length === 0 ? 'pass' : 'fail',
       errors: rowErrors,
     });
@@ -963,16 +963,11 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
   const hasRedundantRule = Object.values(rules).some((r) => r.data_redundant !== undefined);
 
   if (hasRedundantRule) {
-    // Only track columns that actually have a data_redundant rule, not every header
     const redundantCols = new Set(
-      Object.entries(rules)
-        .filter(([, r]) => r.data_redundant !== undefined)
-        .map(([col]) => col)
+      Object.entries(rules).filter(([, r]) => r.data_redundant !== undefined).map(([col]) => col)
     );
-
     const totalRowCount = {};
     let rowCount = 0;
-
     for await (const item of createStream()) {
       if (item._headers) continue;
       rowCount++;
@@ -982,7 +977,6 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
         totalRowCount[col][v] = (totalRowCount[col][v] || 0) + 1;
       }
     }
-
     for (const [col, colRules] of Object.entries(rules)) {
       if (!colRules.data_redundant) continue;
       const rv = colRules.data_redundant;
@@ -994,52 +988,114 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
     }
   }
 
-  // ---- Step 2: pre-compile rules (once, before the row loop) ----
-  // - filter to columns that exist in headers (O(1) Set lookup)
-  // - cache fix_header allowed values as a Set (avoids split+map per row)
-  // - pre-compile cell_contains RegExp (avoids new RegExp per row)
-  // - pre-convert date_format to moment format (avoids pythonToMomentFormat per row)
+  // ---- Step 2: pre-compile rules + pre-allocate summaryMap entries ----
+  //
+  // ALL static per-rule values are computed here exactly once.
+  // summaryMap entries are pre-allocated and stored as direct object references
+  // on each compiled rule — eliminating template-literal key creation, Map
+  // lookups, and object allocation inside the hot 980 K-row loop.
   const headerSet = new Set(headers);
+  const summaryMap = {}; // pre-populated below during compiledRules construction
+
   const compiledRules = Object.entries(rules)
     .filter(([col]) => headerSet.has(col))
     .map(([column, colRules]) => {
       const c = { column, colRules };
+      const sm = (rule) => {
+        const e = { column, rule, failCount: 0, passCount: 0 };
+        summaryMap[`${column}::${rule}`] = e;
+        return e;
+      };
 
-      if (colRules.fix_header !== undefined) {
-        c.fixHeaderAllowed = new Set(
-          String(colRules.fix_header).split(',').map((s) => s.trim())
-        );
-        c.fixHeaderLabel = String(colRules.fix_header);
+      if (colRules.has_empty !== undefined) {
+        c.hasEmptyFail = String(colRules.has_empty).toLowerCase() === 'true';
+        c.smHasEmpty   = sm('has_empty');
       }
-
+      if (colRules.data_type !== undefined) {
+        c.dataType    = String(colRules.data_type).toLowerCase().trim();
+        c.smDataType  = sm('data_type');
+      }
+      if (colRules.data_length !== undefined) {
+        const dl = colRules.data_length;
+        c.dlSpecific = String(dl.specific).toLowerCase() === 'true';
+        c.dlFixLen   = c.dlSpecific ? parseInt(dl.fix_length, 10) : NaN;
+        c.dlMinLen   = !c.dlSpecific && dl.grater_length !== undefined ? parseInt(dl.grater_length, 10) : NaN;
+        c.dlMaxLen   = !c.dlSpecific && dl.less_length   !== undefined ? parseInt(dl.less_length,   10) : NaN;
+        c.smDataLength = sm('data_length');
+      }
+      if (colRules.depend_header !== undefined) {
+        c.dependDepCols = [];
+        Object.entries(colRules.depend_header).slice(1).forEach(([k]) =>
+          String(k).split(',').map((x) => x.trim()).filter(Boolean).forEach((x) => c.dependDepCols.push(x))
+        );
+        // Pre-allocate summaryMap entries for all dependent columns so the hot
+        // loop never needs to do `if (!summaryMap[key])` checks per row.
+        c.dependDepCols.forEach((dc) => {
+          const key = `${dc}::depend_header`;
+          if (!summaryMap[key]) summaryMap[key] = { column: dc, rule: 'depend_header', failCount: 0, passCount: 0 };
+        });
+      }
+      if (colRules.data_redundant !== undefined) {
+        c.drTarget        = String(colRules.data_redundant.value || '').trim();
+        c.drFlagKey       = `${column}::${c.drTarget}`;
+        c.drThresholdStr  = colRules.data_redundant.Threshold || colRules.data_redundant.threshold;
+        c.smDataRedundant = sm('data_redundant');
+      }
+      if (colRules.greater_than !== undefined) {
+        c.gtThreshold   = Number(colRules.greater_than);
+        c.smGreaterThan = sm('greater_than');
+      }
+      if (colRules.less_than !== undefined) {
+        c.ltThreshold = Number(colRules.less_than);
+        c.smLessThan  = sm('less_than');
+      }
+      if (colRules.in_between !== undefined) {
+        const parts = String(colRules.in_between).split(',').map((s) => s.trim());
+        c.ibLower    = parts.length >= 2 ? Number(parts[0]) : NaN;
+        c.ibUpper    = parts.length >= 2 ? Number(parts[1]) : NaN;
+        c.smInBetween = sm('in_between');
+      }
+      if (colRules.double_depend !== undefined) {
+        c.smDoubleDepend = sm('double_depend');
+      }
+      if (colRules.fix_header !== undefined) {
+        c.fixHeaderAllowed = new Set(String(colRules.fix_header).split(',').map((s) => s.trim()));
+        c.fixHeaderLabel   = String(colRules.fix_header);
+        c.smFixHeader      = sm('fix_header');
+      }
+      if (colRules.date_format !== undefined) {
+        c.momentFormat = pythonToMomentFormat(String(colRules.date_format));
+        c.smDateFormat = sm('date_format');
+      }
+      if (colRules.other_depend !== undefined) {
+        c.smOtherDepend = sm('other_depend');
+      }
+      if (colRules.not_match_found !== undefined) {
+        c.nmfValue        = String(colRules.not_match_found).trim();
+        c.smNotMatchFound = sm('not_match_found');
+      }
+      if (colRules.get_non_ld_indicesc !== undefined) {
+        c.nonLdType  = String(colRules.get_non_ld_indicesc).toLowerCase().trim();
+        c.smGetNonLd = sm('get_non_ld_indicesc');
+      }
       if (colRules.cell_contains !== undefined) {
         const pattern = colRules.cell_contains.value;
         if (pattern) {
           c.cellContainsMustMatch = String(colRules.cell_contains.contains).toLowerCase() === 'true';
-          try {
-            c.cellContainsRegex = new RegExp(pattern);
-          } catch (e) {
-            c.cellContainsInvalidRegex = true;
-          }
+          try { c.cellContainsRegex = new RegExp(pattern); }
+          catch (e) { c.cellContainsInvalidRegex = true; }
         }
+        c.smCellContains = sm('cell_contains');
       }
-
-      if (colRules.date_format !== undefined) {
-        c.momentFormat = pythonToMomentFormat(String(colRules.date_format));
+      if (colRules.cell_value_start_end_with !== undefined) {
+        c.smStartEnd = sm('cell_value_start_end_with');
       }
 
       return c;
     });
 
   // ---- Step 3: streaming validation pass ----
-  const summaryMap = {};
-  const trackSummary = (column, ruleName, passed) => {
-    const key = `${column}::${ruleName}`;
-    if (!summaryMap[key]) summaryMap[key] = { column, rule: ruleName, failCount: 0, passCount: 0 };
-    if (passed) summaryMap[key].passCount++; else summaryMap[key].failCount++;
-  };
-
-  const results = []; // only stores failing rows (up to MAX_STORED)
+  const results = [];
   let totalRows = 0;
   let failedRows = 0;
   let rowIdx = 0;
@@ -1050,162 +1106,215 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
     const row = item;
     const rowErrors = [];
 
-    for (const compiled of compiledRules) {
-      const { column, colRules } = compiled;
-      const cellValue = row[column];
+    for (const c of compiledRules) {
+      const { column, colRules } = c;
+      const cv = row[column];
+      // Inline isEmpty once per cell — avoids a function call per rule per row
+      const cvEmpty = cv === null || cv === undefined || (typeof cv === 'string' && cv.trim() === '');
 
-      if (colRules.has_empty !== undefined) {
-        const err = checkHasEmpty(cellValue, colRules.has_empty, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'has_empty', false); }
-        else trackSummary(column, 'has_empty', true);
+      // ---- has_empty (fully inlined) ----
+      if (c.smHasEmpty) {
+        if (c.hasEmptyFail && cvEmpty) {
+          rowErrors.push({ column, rule: 'has_empty', message: `Column "${column}" must not be empty.`, value: cv });
+          c.smHasEmpty.failCount++;
+        } else { c.smHasEmpty.passCount++; }
       }
-      if (colRules.data_type !== undefined) {
-        const err = checkDataType(cellValue, colRules.data_type, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'data_type', false); }
-        else trackSummary(column, 'data_type', true);
-      }
-      if (colRules.data_length !== undefined) {
-        const err = checkDataLength(cellValue, colRules.data_length, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'data_length', false); }
-        else trackSummary(column, 'data_length', true);
-      }
-      if (colRules.depend_header !== undefined) {
-        const { triggered, errors: depErrs } = checkDependHeader(row, colRules.depend_header);
-        if (triggered) {
-          const depEntries = Object.entries(colRules.depend_header).slice(1);
-          const depCols = [];
-          depEntries.forEach(([k]) => String(k).split(',').map((c) => c.trim()).filter(Boolean).forEach((c) => depCols.push(c)));
-          if (depErrs.length > 0) {
-            const failedCols = new Set(depErrs.map((e) => e.column));
-            depErrs.forEach((e) => rowErrors.push(e));
-            depCols.forEach((c) => trackSummary(c, 'depend_header', !failedCols.has(c)));
-          } else {
-            depCols.forEach((c) => trackSummary(c, 'depend_header', true));
-          }
-        }
-      }
-      if (colRules.data_redundant !== undefined) {
-        const targetValue = String(colRules.data_redundant.value || '').trim();
-        const cellStr = String(cellValue !== undefined ? cellValue : '').trim();
-        const flagKey = `${column}::${targetValue}`;
-        if (cellStr === targetValue && redundantFlags.has(flagKey)) {
-          rowErrors.push({
-            column, rule: 'data_redundant',
-            message: `Column "${column}" value "${targetValue}" exceeds redundancy threshold.`, value: cellValue
-          });
-          trackSummary(column, 'data_redundant', false);
-        } else trackSummary(column, 'data_redundant', true);
-      }
-      if (colRules.greater_than !== undefined) {
-        const err = checkGreaterThan(cellValue, colRules.greater_than, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'greater_than', false); }
-        else trackSummary(column, 'greater_than', true);
-      }
-      if (colRules.less_than !== undefined) {
-        const err = checkLessThan(cellValue, colRules.less_than, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'less_than', false); }
-        else trackSummary(column, 'less_than', true);
-      }
-      if (colRules.in_between !== undefined) {
-        const err = checkInBetween(cellValue, colRules.in_between, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'in_between', false); }
-        else trackSummary(column, 'in_between', true);
-      }
-      if (colRules.double_depend !== undefined) {
-        const errs = checkDoubleDepend(row, colRules.double_depend, column);
-        if (errs) {
-          (Array.isArray(errs) ? errs : [errs]).forEach((e) => rowErrors.push(e));
-          trackSummary(column, 'double_depend', false);
-        } else trackSummary(column, 'double_depend', true);
-      }
-      // fix_header: pre-built Set for O(1) lookup instead of split+map per row
-      if (colRules.fix_header !== undefined) {
-        let fhErr = null;
-        if (!isEmpty(cellValue)) {
-          const strVal = String(cellValue).trim();
-          if (!compiled.fixHeaderAllowed.has(strVal)) {
-            fhErr = {
-              column, rule: 'fix_header',
-              message: `Column "${column}" must be one of [${compiled.fixHeaderLabel}]. Got: "${strVal}".`,
-              value: cellValue,
-            };
-          }
-        }
-        if (fhErr) { rowErrors.push(fhErr); trackSummary(column, 'fix_header', false); }
-        else trackSummary(column, 'fix_header', true);
-      }
-      // date_format: pre-converted moment format string, no pythonToMomentFormat per row
-      if (colRules.date_format !== undefined) {
-        let dtErr = null;
-        if (!isEmpty(cellValue)) {
-          const m = moment(String(cellValue), compiled.momentFormat, true);
-          if (!m.isValid()) {
-            dtErr = {
-              column, rule: 'date_format',
-              message: `Column "${column}" must match date format "${colRules.date_format}" (moment: "${compiled.momentFormat}"). Got: "${cellValue}".`,
-              value: cellValue,
-            };
-          }
-        }
-        if (dtErr) { rowErrors.push(dtErr); trackSummary(column, 'date_format', false); }
-        else trackSummary(column, 'date_format', true);
-      }
-      if (colRules.other_depend !== undefined) {
-        const errs = checkOtherDepend(row, colRules.other_depend, column);
-        if (errs) {
-          (Array.isArray(errs) ? errs : [errs]).forEach((e) => rowErrors.push(e));
-          trackSummary(column, 'other_depend', false);
-        } else trackSummary(column, 'other_depend', true);
-      }
-      if (colRules.not_match_found !== undefined) {
-        const err = checkNotMatchFound(cellValue, colRules.not_match_found, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'not_match_found', false); }
-        else trackSummary(column, 'not_match_found', true);
-      }
-      if (colRules.get_non_ld_indicesc !== undefined) {
-        const err = checkGetNonLdIndices(cellValue, colRules.get_non_ld_indicesc, column);
-        if (err) { rowErrors.push(err); trackSummary(column, 'get_non_ld_indicesc', false); }
-        else trackSummary(column, 'get_non_ld_indicesc', true);
-      }
-      // cell_contains: pre-compiled RegExp instead of new RegExp per row
-      if (colRules.cell_contains !== undefined) {
-        let ccErr = null;
-        if (!isEmpty(cellValue)) {
-          const pattern = colRules.cell_contains.value;
-          if (pattern) {
-            if (compiled.cellContainsInvalidRegex) {
-              ccErr = {
-                column, rule: 'cell_contains',
-                message: `Invalid regex pattern "${pattern}" for column "${column}".`,
-                value: cellValue,
-              };
-            } else if (compiled.cellContainsRegex) {
-              const matches = compiled.cellContainsRegex.test(String(cellValue));
-              if (compiled.cellContainsMustMatch && !matches) {
-                ccErr = {
-                  column, rule: 'cell_contains',
-                  message: `Column "${column}" must match pattern "${pattern}". Got: "${cellValue}".`,
-                  value: cellValue,
-                };
-              } else if (!compiled.cellContainsMustMatch && matches) {
-                ccErr = {
-                  column, rule: 'cell_contains',
-                  message: `Column "${column}" must NOT match pattern "${pattern}". Got: "${cellValue}".`,
-                  value: cellValue,
-                };
-              }
+
+      // ---- data_type (fully inlined) ----
+      if (c.smDataType) {
+        let err = null;
+        if (!cvEmpty) {
+          switch (c.dataType) {
+            case 'str':
+              if (typeof cv !== 'string') err = { column, rule: 'data_type', message: `Column "${column}" must be a string.`, value: cv };
+              break;
+            case 'int':
+              if (!/^-?\d+$/.test(String(cv).trim())) err = { column, rule: 'data_type', message: `Column "${column}" must be an integer. Got: "${cv}".`, value: cv };
+              break;
+            case 'float':
+              if (isNaN(Number(cv))) err = { column, rule: 'data_type', message: `Column "${column}" must be a float/number. Got: "${cv}".`, value: cv };
+              break;
+            case 'bool': {
+              const bv = String(cv).toLowerCase().trim();
+              if (!['true','false','1','0','yes','no'].includes(bv)) err = { column, rule: 'data_type', message: `Column "${column}" must be a boolean (true/false/1/0/yes/no). Got: "${cv}".`, value: cv };
+              break;
             }
           }
         }
-        if (ccErr) { rowErrors.push(ccErr); trackSummary(column, 'cell_contains', false); }
-        else trackSummary(column, 'cell_contains', true);
+        if (err) { rowErrors.push(err); c.smDataType.failCount++; } else { c.smDataType.passCount++; }
       }
-      if (colRules.cell_value_start_end_with !== undefined) {
-        const errs = checkCellValueStartEndWith(cellValue, colRules.cell_value_start_end_with, column);
+
+      // ---- data_length (fully inlined) ----
+      if (c.smDataLength) {
+        let err = null;
+        if (!cvEmpty) {
+          const strVal = String(cv);
+          if (c.dlSpecific) {
+            if (!isNaN(c.dlFixLen) && strVal.length !== c.dlFixLen)
+              err = { column, rule: 'data_length', message: `Column "${column}" must have exactly ${c.dlFixLen} characters. Got ${strVal.length}.`, value: cv };
+          } else {
+            if (!isNaN(c.dlMinLen) && strVal.length < c.dlMinLen)
+              err = { column, rule: 'data_length', message: `Column "${column}" must have at least ${c.dlMinLen} characters. Got ${strVal.length}.`, value: cv };
+            if (!err && !isNaN(c.dlMaxLen) && strVal.length > c.dlMaxLen)
+              err = { column, rule: 'data_length', message: `Column "${column}" must have at most ${c.dlMaxLen} characters. Got ${strVal.length}.`, value: cv };
+          }
+        }
+        if (err) { rowErrors.push(err); c.smDataLength.failCount++; } else { c.smDataLength.passCount++; }
+      }
+
+      // ---- depend_header ----
+      if (colRules.depend_header !== undefined) {
+        const { triggered, errors: depErrs } = checkDependHeader(row, colRules.depend_header);
+        if (triggered) {
+          const depCols = c.dependDepCols;
+          if (depErrs.length > 0) {
+            const failedCols = new Set(depErrs.map((e) => e.column));
+            depErrs.forEach((e) => rowErrors.push(e));
+            // summaryMap entries pre-allocated at compile time — no guard needed
+            depCols.forEach((dc) => {
+              const sm = summaryMap[`${dc}::depend_header`];
+              if (failedCols.has(dc)) sm.failCount++; else sm.passCount++;
+            });
+          } else {
+            depCols.forEach((dc) => {
+              summaryMap[`${dc}::depend_header`].passCount++;
+            });
+          }
+        }
+      }
+
+      // ---- data_redundant ----
+      if (c.smDataRedundant) {
+        const cellStr = cvEmpty ? '' : String(cv).trim();
+        if (cellStr === c.drTarget && redundantFlags.has(c.drFlagKey)) {
+          rowErrors.push({ column, rule: 'data_redundant', message: `Column "${column}" value "${c.drTarget}" exceeds redundancy threshold.`, value: cv });
+          c.smDataRedundant.failCount++;
+        } else { c.smDataRedundant.passCount++; }
+      }
+
+      // ---- greater_than (fully inlined) ----
+      if (c.smGreaterThan) {
+        let err = null;
+        if (!cvEmpty) {
+          const n = Number(cv);
+          if (isNaN(n)) err = { column, rule: 'greater_than', message: `Column "${column}" must be numeric for greater_than check. Got: "${cv}".`, value: cv };
+          else if (!isNaN(c.gtThreshold) && n <= c.gtThreshold) err = { column, rule: 'greater_than', message: `Column "${column}" must be greater than ${c.gtThreshold}. Got: ${n}.`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smGreaterThan.failCount++; } else { c.smGreaterThan.passCount++; }
+      }
+
+      // ---- less_than (fully inlined) ----
+      if (c.smLessThan) {
+        let err = null;
+        if (!cvEmpty) {
+          const n = Number(cv);
+          if (isNaN(n)) err = { column, rule: 'less_than', message: `Column "${column}" must be numeric for less_than check. Got: "${cv}".`, value: cv };
+          else if (!isNaN(c.ltThreshold) && n >= c.ltThreshold) err = { column, rule: 'less_than', message: `Column "${column}" must be less than ${c.ltThreshold}. Got: ${n}.`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smLessThan.failCount++; } else { c.smLessThan.passCount++; }
+      }
+
+      // ---- in_between (fully inlined) ----
+      if (c.smInBetween) {
+        let err = null;
+        if (!cvEmpty) {
+          const n = Number(cv);
+          if (isNaN(n)) err = { column, rule: 'in_between', message: `Column "${column}" must be numeric for in_between check. Got: "${cv}".`, value: cv };
+          else if (!isNaN(c.ibLower) && !isNaN(c.ibUpper) && (n < c.ibLower || n > c.ibUpper))
+            err = { column, rule: 'in_between', message: `Column "${column}" must be between ${c.ibLower} and ${c.ibUpper}. Got: ${n}.`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smInBetween.failCount++; } else { c.smInBetween.passCount++; }
+      }
+
+      // ---- double_depend ----
+      if (c.smDoubleDepend) {
+        const errs = checkDoubleDepend(row, colRules.double_depend, column);
         if (errs) {
           (Array.isArray(errs) ? errs : [errs]).forEach((e) => rowErrors.push(e));
-          trackSummary(column, 'cell_value_start_end_with', false);
-        } else trackSummary(column, 'cell_value_start_end_with', true);
+          c.smDoubleDepend.failCount++;
+        } else { c.smDoubleDepend.passCount++; }
+      }
+
+      // ---- fix_header (inlined, pre-built Set) ----
+      if (c.smFixHeader) {
+        let err = null;
+        if (!cvEmpty) {
+          const strVal = String(cv).trim();
+          if (!c.fixHeaderAllowed.has(strVal))
+            err = { column, rule: 'fix_header', message: `Column "${column}" must be one of [${c.fixHeaderLabel}]. Got: "${strVal}".`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smFixHeader.failCount++; } else { c.smFixHeader.passCount++; }
+      }
+
+      // ---- date_format (inlined, pre-converted moment format) ----
+      if (c.smDateFormat) {
+        let err = null;
+        if (!cvEmpty) {
+          const m = moment(String(cv), c.momentFormat, true);
+          if (!m.isValid())
+            err = { column, rule: 'date_format', message: `Column "${column}" must match date format "${colRules.date_format}" (moment: "${c.momentFormat}"). Got: "${cv}".`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smDateFormat.failCount++; } else { c.smDateFormat.passCount++; }
+      }
+
+      // ---- other_depend ----
+      if (c.smOtherDepend) {
+        const errs = checkOtherDepend(row, colRules.other_depend, column);
+        if (errs) {
+          (Array.isArray(errs) ? errs : [errs]).forEach((e) => rowErrors.push(e));
+          c.smOtherDepend.failCount++;
+        } else { c.smOtherDepend.passCount++; }
+      }
+
+      // ---- not_match_found (fully inlined) ----
+      if (c.smNotMatchFound) {
+        let err = null;
+        if (!cvEmpty && String(cv).trim() === c.nmfValue)
+          err = { column, rule: 'not_match_found', message: `Column "${column}" must not equal "${colRules.not_match_found}". Got: "${cv}".`, value: cv };
+        if (err) { rowErrors.push(err); c.smNotMatchFound.failCount++; } else { c.smNotMatchFound.passCount++; }
+      }
+
+      // ---- get_non_ld_indicesc (fully inlined) ----
+      if (c.smGetNonLd) {
+        let err = null;
+        if (!cvEmpty) {
+          const items = String(cv).split(/[,|;\s]+/).filter((s) => s.length > 0);
+          const bad = [];
+          for (const it of items) {
+            const t = it.trim();
+            if (c.nonLdType === 'int' && !/^-?\d+$/.test(t)) bad.push(t);
+            else if (c.nonLdType === 'float' && isNaN(Number(t))) bad.push(t);
+          }
+          if (bad.length > 0)
+            err = { column, rule: 'get_non_ld_indicesc', message: `Column "${column}" contains non-${c.nonLdType} items: [${bad.join(', ')}].`, value: cv };
+        }
+        if (err) { rowErrors.push(err); c.smGetNonLd.failCount++; } else { c.smGetNonLd.passCount++; }
+      }
+
+      // ---- cell_contains (inlined, pre-compiled RegExp) ----
+      if (c.smCellContains) {
+        let err = null;
+        if (!cvEmpty && colRules.cell_contains.value) {
+          if (c.cellContainsInvalidRegex) {
+            err = { column, rule: 'cell_contains', message: `Invalid regex pattern "${colRules.cell_contains.value}" for column "${column}".`, value: cv };
+          } else if (c.cellContainsRegex) {
+            const matches = c.cellContainsRegex.test(String(cv));
+            if (c.cellContainsMustMatch && !matches)
+              err = { column, rule: 'cell_contains', message: `Column "${column}" must match pattern "${colRules.cell_contains.value}". Got: "${cv}".`, value: cv };
+            else if (!c.cellContainsMustMatch && matches)
+              err = { column, rule: 'cell_contains', message: `Column "${column}" must NOT match pattern "${colRules.cell_contains.value}". Got: "${cv}".`, value: cv };
+          }
+        }
+        if (err) { rowErrors.push(err); c.smCellContains.failCount++; } else { c.smCellContains.passCount++; }
+      }
+
+      // ---- cell_value_start_end_with ----
+      if (c.smStartEnd) {
+        const errs = checkCellValueStartEndWith(cv, colRules.cell_value_start_end_with, column);
+        if (errs) {
+          (Array.isArray(errs) ? errs : [errs]).forEach((e) => rowErrors.push(e));
+          c.smStartEnd.failCount++;
+        } else { c.smStartEnd.passCount++; }
       }
     }
 
@@ -1213,25 +1322,25 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
     if (rowErrors.length > 0) {
       failedRows++;
       if (results.length < MAX_STORED) {
-        // Cap errors per row at 20; trim value strings to 200 chars to limit doc size
         const trimmedErrors = rowErrors.slice(0, 20).map((e) => ({
-          column: e.column || '',
-          rule: e.rule || '',
+          column:  e.column  || '',
+          rule:    e.rule    || '',
           message: e.message || '',
-          value: e.value !== undefined && e.value !== null
-            ? String(e.value).slice(0, 200)
-            : '',
+          value:   e.value !== undefined && e.value !== null ? String(e.value).slice(0, 200) : '',
         }));
-        results.push({ rowIndex: rowIdx, status: 'fail', errors: trimmedErrors });
+        results.push({ row_number: rowIdx + 2, status: 'fail', errors: trimmedErrors });
       }
     }
     rowIdx++;
   }
 
-  const passedRows = totalRows - failedRows;
-  const summary = Object.values(summaryMap);
-
-  return { results, summary, totalRows, passedRows, failedRows };
+  return {
+    results,
+    summary: Object.values(summaryMap),
+    totalRows,
+    passedRows: totalRows - failedRows,
+    failedRows,
+  };
 };
 
 

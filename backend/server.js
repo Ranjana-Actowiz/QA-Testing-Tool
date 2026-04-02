@@ -1,37 +1,36 @@
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const path = require('path');
 const connectDB = require('./config/db');
+const { startCleanupScheduler } = require('./services/uploadCleanup');
 
-// ---------------------------------------------------------------------------
-// App initialisation
-// ---------------------------------------------------------------------------
 
 const app = express();
-
-// ---------------------------------------------------------------------------
-// Database
-// ---------------------------------------------------------------------------
-
+const PORT = parseInt(process.env.PORT, 10) || 5000;
 connectDB();
 
-// ---------------------------------------------------------------------------
-// Middleware
-// ---------------------------------------------------------------------------
-
+// ----------------------------------------- Middleware ------------------------------------------------------
 // CORS — allow all origins in development; tighten in production via env vars
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-    : '*',
+  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()) : '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 };
 
 app.use(cors(corsOptions));
+
+// Gzip compression — skip binary uploads, compress JSON/text responses
+app.use(compression({
+  filter: (req, res) => {
+    // Don't compress multipart uploads
+    if (req.headers['content-type']?.startsWith('multipart/')) return false;
+    return compression.filter(req, res);
+  },
+  level: 6, // balanced speed vs ratio (default is 6 anyway)
+}));
 
 // Body parsers
 app.use(express.json({ limit: '10mb' }));
@@ -40,10 +39,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Serve uploaded files statically (optional — useful for debugging)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ---------------------------------------------------------------------------
-// Routes
-// ---------------------------------------------------------------------------
-
+// ------------  Routes ---------------------------------------------
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/validate', require('./routes/validate'));
 
@@ -59,28 +55,12 @@ app.get('/api/health', (req, res) => {
 // Root endpoint
 app.get('/', (req, res) => {
   res.status(200).json({
-    name: 'QA Tool Backend API',
-    version: '1.0.0',
-    endpoints: {
-      health: 'GET /api/health',
-      upload: {
-        'POST /api/upload': 'Upload a CSV/XLSX/XLS file',
-        'GET /api/upload': 'List all uploads',
-        'GET /api/upload/:id': 'Get a single upload',
-      },
-      validate: {
-        'POST /api/validate': 'Run validation on an upload',
-        'GET /api/validate/report/:id': 'Get a validation report',
-        'GET /api/validate/report/:id/download': 'Download report as CSV',
-      },
-    },
+    name: 'QA Tool Backend API Working Fine',
+    version: '1.0.0'
   });
 });
 
-// ---------------------------------------------------------------------------
-// 404 handler
-// ---------------------------------------------------------------------------
-
+// --------------------------------------  404 handler-------------------------------------------------
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -88,11 +68,9 @@ app.use((req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Global error handler
-// ---------------------------------------------------------------------------
+// ---------------------------------------------- Global error handler ------------------------------------------------
 
-// eslint-disable-next-line no-unused-vars
+//?  eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
 
@@ -127,20 +105,25 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Start server
-// ---------------------------------------------------------------------------
 
-const PORT = parseInt(process.env.PORT, 10) || 5000;
-
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, "0.0.0.0" , () => {
   console.log(`QA Tool backend running on http://localhost:${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  startCleanupScheduler();
 });
+
+
 
 // Allow very large file uploads / long validation runs (6 hours max)
 server.timeout = 6 * 60 * 60 * 1000;
 server.keepAliveTimeout = 6 * 60 * 60 * 1000;
+server.headersTimeout = 0; // Disable the 60 s default — large uploads arrive slowly
+
+// Per-socket optimisations for high-throughput file transfers
+server.on('connection', (socket) => {
+  socket.setNoDelay(true);           // Disable Nagle's algorithm — send chunks immediately
+  socket.setKeepAlive(true, 30000);  // TCP keep-alive every 30 s
+});
 
 // Graceful shutdown
 const shutdown = (signal) => {

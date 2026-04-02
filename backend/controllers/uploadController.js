@@ -1,72 +1,42 @@
 const path = require('path');
 const fs = require('fs');
-const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
 const Upload = require('../models/Upload');
 const { createRowStream } = require('../services/fileParser');
 
-// ---------------------------------------------------------------------------
-// Multer configuration
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------  Controller handlers ------------------------------------------------
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
-
-// Ensure uploads directory exists
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const uniqueName = `${uuidv4()}${ext}`;
-    cb(null, uniqueName);
-  },
-});
-
-const fileFilter = (req, file, cb) => {
-  const allowedMimes = [
-    'text/csv',
-    'application/csv',
-    'text/plain',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel',
-    'application/octet-stream',
-  ];
-  const allowedExts = ['.csv', '.xlsx', '.xls'];
-  const ext = path.extname(file.originalname).toLowerCase();
-
-  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error(
-        `Unsupported file type: ${file.mimetype}. Only CSV, XLSX, and XLS files are allowed.`
-      ),
-      false
-    );
-  }
-};
-
-const upload = multer({
-  storage,
-  fileFilter,
-  // No fileSize limit — streaming handles files of any size
-});
-
-// Export the multer middleware for use in routes
-const uploadMiddleware = upload.single('file');
-
-// ---------------------------------------------------------------------------
-// Controller handlers
-// ---------------------------------------------------------------------------
+/**
+ * Count CSV rows by scanning raw bytes for newline characters.
+ * 10–20× faster than csv-parser because there is no field parsing overhead.
+ * Result is -1 to exclude the header row (starts counting from -1).
+ * Note: rows containing embedded newlines inside quoted fields are rare and
+ * are counted as multiple rows; actual row count is corrected during validation.
+ */
+const countCsvRowsFast = (filePath) =>
+  new Promise((resolve, reject) => {
+    let count = -1; // exclude header row
+    const stream = fs.createReadStream(filePath, { highWaterMark: 4 * 1024 * 1024 });
+    stream.on('data', (chunk) => {
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === 10) count++; // 10 = '\n'
+      }
+    });
+    stream.on('end', () => resolve(Math.max(0, count)));
+    stream.on('error', reject);
+  });
 
 /**
  * POST /api/upload
  * Accept a file upload, parse it, save metadata to DB.
+ *
+ * Optimised for large files (500 MB – 2 GB+):
+ *   1. The parse stream is stopped after headers + 5 preview rows — the whole
+ *      file is NOT read during the upload request.
+ *   2. Row counting is done asynchronously (fire-and-forget) after the HTTP
+ *      response is sent.  For CSV a fast binary newline scanner is used;
+ *      for XLSX/XLS the streaming parser is used in the background.
+ *   3. The DB record is updated with the final row count once it is ready.
+ *      The frontend polls GET /api/upload/:id to pick up the updated count.
  */
 const uploadFile = async (req, res) => {
   try {
@@ -75,11 +45,11 @@ const uploadFile = async (req, res) => {
     }
 
     const { filename, originalname, mimetype, size, path: filePath } = req.file;
+    const ext = path.extname(filePath).toLowerCase();
 
-    // Stream the file — collect only headers + first 5 preview rows + total count
+    // --- Read headers + first 5 preview rows, then break immediately ---
     let headers = [];
     const preview = [];
-    let totalRows = 0;
 
     try {
       const stream = createRowStream(filePath, mimetype);
@@ -88,8 +58,8 @@ const uploadFile = async (req, res) => {
           headers = item._headers;
           continue;
         }
-        totalRows++;
-        if (preview.length < 5) preview.push(item);
+        preview.push(item);
+        if (preview.length >= 5) break; // early exit — no full file scan here
       }
     } catch (parseErr) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -99,6 +69,7 @@ const uploadFile = async (req, res) => {
       });
     }
 
+    // upload file empty case ...
     if (headers.length === 0) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.status(422).json({
@@ -107,13 +78,13 @@ const uploadFile = async (req, res) => {
       });
     }
 
-    // Save upload record to MongoDB
+    // Save record immediately with totalRows: 0 (background job will update it)
     const uploadDoc = new Upload({
       filename,
       originalName: originalname,
       uploadDate: new Date(),
       headers,
-      totalRows,
+      totalRows: 0,
       filePath,
       fileSize: size,
       mimeType: mimetype,
@@ -122,12 +93,38 @@ const uploadFile = async (req, res) => {
 
     await uploadDoc.save();
 
+    // --- Fire-and-forget: count rows without blocking the HTTP response ---
+    const docId = uploadDoc._id;
+    const isCSV  = mimetype === 'text/csv' || mimetype === 'application/csv' || mimetype === 'text/plain' || ext === '.csv';
+
+    setImmediate(async () => {
+      try {
+        let totalRows;
+        if (isCSV) {
+          // Binary newline scan — no CSV parsing, reads raw bytes only
+          totalRows = await countCsvRowsFast(filePath);
+        } else {
+          // XLSX / XLS — stream through with the appropriate parser
+          const countStream = createRowStream(filePath, mimetype);
+          let count = 0;
+          for await (const item of countStream) {
+            if (item._headers) continue;
+            count++;
+          }
+          totalRows = count;
+        }
+        await Upload.findByIdAndUpdate(docId, { totalRows });
+      } catch (err) {
+        console.error('Background row count error:', err.message);
+      }
+    });
+
     return res.status(201).json({
       success: true,
       message: 'File uploaded and parsed successfully.',
       uploadId: uploadDoc._id,
       headers,
-      totalRows,
+      totalRows: 0,   // updated asynchronously — frontend polls GET /api/upload/:id
       preview,
       filename: originalname,
       uploadDate: uploadDoc.uploadDate,
@@ -140,6 +137,10 @@ const uploadFile = async (req, res) => {
     });
   }
 };
+
+
+
+
 
 /**
  * GET /api/upload/:id
@@ -182,5 +183,4 @@ module.exports = {
   uploadFile,
   getUpload,
   getAllUploads,
-  uploadMiddleware,
 };

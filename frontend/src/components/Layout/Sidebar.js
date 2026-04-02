@@ -1,22 +1,40 @@
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { HiOutlineUpload } from "react-icons/hi";
 
 const NAV_SECTIONS = [
-  // {
-  //   title: "MAIN",
-  //   items: [
-  //     { path: "/", label: "Dashboard", icon: "🏠" },
-  //   ],
-  // },
   {
-    title: "DATA QA",
     items: [
-      { path: "/", label: "Upload File", icon: "⬆️" },
+      { path: "/", label: "Upload File", icon: <HiOutlineUpload /> },
     ],
   },
 ];
 
 export default function Sidebar() {
   const location = useLocation();
+  // "open" = full sidebar with ✕, "ready" = full sidebar with ☰, "collapsed" = icons only
+  const [mode, setMode] = useState("open");
+  const [hovered, setHovered] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+
+  const expanded = mode !== "collapsed" || hovered;
+
+  // Listen for mobile toggle/close events dispatched by Layout
+  useEffect(() => {
+    const handleToggle = () => setIsMobileOpen((p) => !p);
+    const handleClose = () => setIsMobileOpen(false);
+    window.addEventListener("toggleMobileSidebar", handleToggle);
+    window.addEventListener("closeMobileSidebar", handleClose);
+    return () => {
+      window.removeEventListener("toggleMobileSidebar", handleToggle);
+      window.removeEventListener("closeMobileSidebar", handleClose);
+    };
+  }, []);
+
+  // Auto-close mobile sidebar on route change
+  useEffect(() => {
+    setIsMobileOpen(false);
+  }, [location.pathname]);
 
   const isActive = (path) => {
     if (path === "/") return location.pathname === "/";
@@ -24,52 +42,113 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="w-64 h-screen flex-shrink-0 bg-[#3F4D67] text-white flex flex-col overflow-y-auto">
+    <>
+      {/* Mobile backdrop */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-40 lg:hidden"
+          onClick={() => setIsMobileOpen(false)}
+        />
+      )}
 
-      {/* Logo / Branding */}
-      <div className="px-5 py-4 border-b border-white/10 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center font-bold text-lg">
-          Q
-        </div>
-        <div>
-          <div className="font-bold text-sm tracking-wide">QA TOOL</div>
-          <div className="text-[10px] text-white/50">DATA VALIDATION</div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <div className="flex-1 overflow-y-auto px-3 py-4">
-
-        {NAV_SECTIONS.map((section, idx) => (
-          <div key={idx} className="mb-6">
-
-            {/* Section Title */}
-            <div className="text-[10px] text-white/40 px-3 mb-2 font-semibold tracking-widest uppercase">
-              {section.title}
-            </div>
-
-            {/* Items */}
-            <div className="space-y-1">
-              {section.items.map((item) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-all ${
-                    isActive(item.path)
-                      ? "bg-white/10 border-l-4 border-cyan-400 text-white"
-                      : "text-white/70 hover:bg-white/5 hover:text-white"
-                  }`}
+      <aside
+        onMouseEnter={() => mode === "collapsed" && setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className={`flex flex-col bg-[#3F4D67] text-white h-full transition-all duration-300 ease-in-out fixed lg:relative z-50 lg:z-auto ${isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} ${expanded ?"w-64" : "w-16"} overflow-y-auto overflow-x-hidden`}
+      >
+        {/* Logo / Branding */}
+        <div className={`border-b border-white/10 flex items-center py-4 flex-shrink-0 ${expanded ? "px-5 gap-3" : "justify-center px-2"}`}>
+          {expanded ? (
+            <>
+              <Link to="/" className="flex items-center gap-2.5 min-w-0 flex-1" onClick={() => setIsMobileOpen(false)}>
+                <div className="rounded-full overflow-hidden bg-white shrink-0">
+                  <img src="/icon.svg" alt="App logo" className="h-10 w-10 shrink-0 scale-110" />
+                </div>
+                 <div className="flex flex-col leading-tight min-w-0">
+                  <span className="text-lg font-extrabold text-white tracking-widest uppercase">Actowiz</span>
+                  <span className="text-[11px] font-semibold tracking-widest uppercase text-white/70">QA TOOL</span>
+                </div>
+              </Link>
+              
+              {/* Desktop collapse controls */}
+              {mode === "open" ? (
+                <button
+                  onClick={() => setMode("ready")}
+                  className="hidden lg:flex shrink-0 ml-auto h-9 w-9 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
+                  aria-label="Prepare to collapse"
                 >
-                  <span className="text-sm">{item.icon}</span>
-                  <span className="font-medium">{item.label}</span>
-                </Link>
-              ))}
+                  {/* ✕ */}
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (mode === "collapsed") {
+                      setMode("open");
+                      setHovered(false);
+                    } else {
+                      setMode("collapsed");
+                      setHovered(false);
+                    }
+                  }}
+                  className="hidden lg:flex shrink-0 ml-auto h-9 w-9 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
+                  aria-label={mode === "collapsed" ? "Pin sidebar open" : "Collapse sidebar"}
+                >
+                  {/* ☰ */}
+                  <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Mobile close button */}
+              <button
+                onClick={() => setIsMobileOpen(false)}
+                className="lg:hidden shrink-0 ml-1 h-9 w-9 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
+              >
+                <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            </>
+          ) : (
+            <div className="w-8 h-8 bg-white rounded-xl overflow-hidden flex items-center justify-center">
+              <img src="/icon.svg" alt="QA Tool" className="w-8 h-8 object-contain " />
             </div>
+          )}
+        </div>
 
-          </div>
-        ))}
-
-      </div>
-    </aside>
+        {/* Navigation */}
+        <div className={`flex-1 overflow-y-auto py-4 ${expanded ? "px-2" : "px-2"}`}>
+          {NAV_SECTIONS.map((section, idx) => (
+            <div key={idx} className="mb-6">
+              {expanded && section.title && (
+                <div className="text-[10px] text-white/40 px-3 mb-2 font-semibold tracking-widest uppercase">
+                  {section.title}
+                </div>
+              )}
+              <div className="space-y-1">
+                {section.items.map((item) => (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    onClick={() => setIsMobileOpen(false)}
+                    title={!expanded ? item.label : undefined}
+                    className={`flex items-center py-3 rounded-lg text-base transition-all ${ expanded ? "gap-3 px-4" : "justify-center px-2" } ${
+                      isActive(item.path) ? "bg-white/10 text-white" + (expanded ? "" : "") : "text-white/70 hover:bg-white/5 hover:text-white"
+                    }`}
+                  >
+                    <span className="text-xl flex-shrink-0">{item.icon}</span>
+                    {expanded && <span className="font-semibold text-[15px]">{item.label}</span>}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </aside>
+    </>
   );
 }

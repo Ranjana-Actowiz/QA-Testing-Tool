@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const API = axios.create({
-  baseURL: 'http://localhost:5000/api',
+  baseURL: process.env.REACT_APP_API_BASE_URL,
   timeout: 0, // no timeout — large files can take minutes
 });
 
@@ -45,6 +45,7 @@ export const runValidation = (data) => API.post('/validate', data);  //validatio
 
 export const getReport = (id) => API.get(`/validate/report/${id}`);
 
-export const getDownloadUrl = (id) => `http://localhost:5000/api/validate/report/${id}/download`;
+export const getDownloadUrl = (id) => `${process.env.REACT_APP_API_BASE_URL}/validate/report/${id}/download`;
+export const getColumnDownloadUrl = (id, column) => `${process.env.REACT_APP_API_BASE_URL}/validate/report/${id}/download?column=${encodeURIComponent(column)}`;
 
 export default API;
