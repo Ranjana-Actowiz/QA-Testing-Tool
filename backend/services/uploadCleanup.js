@@ -75,12 +75,12 @@ async function runCleanup() {
 
 // ---------------------------------------------------------------------------
 
-function startCleanupScheduler() {
-  // Delay the first run so MongoDB has time to connect on cold start
-  setTimeout(() => {
-    runCleanup();
-    setInterval(runCleanup, INTERVAL_MS);
-  }, STARTUP_DELAY);
-}
+// function startCleanupScheduler() {
+//   // Delay the first run so MongoDB has time to connect on cold start
+//   setTimeout(() => {
+//     runCleanup();
+//     setInterval(runCleanup, INTERVAL_MS);
+//   }, STARTUP_DELAY);
+// }
 
 module.exports = { startCleanupScheduler, runCleanup };

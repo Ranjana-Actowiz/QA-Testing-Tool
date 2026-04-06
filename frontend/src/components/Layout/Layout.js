@@ -1,4 +1,5 @@
 import Sidebar from "./Sidebar";
+import Footer from "../Footer";
 
 export default function Layout({ children }) {
   return (
@@ -23,6 +24,8 @@ export default function Layout({ children }) {
         </header>
 
         <main className="flex-1 overflow-y-auto">{children}</main>
+
+        <Footer />
 
       </div>
 

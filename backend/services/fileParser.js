@@ -23,12 +23,12 @@ const cellToString = (v) => (v !== undefined && v !== null ? String(v) : '');
  */
 async function* streamCsvRows(filePath) {
   const HIGH_WATER = 1_000; // pause the file read stream at this queue depth
-  const LOW_WATER  =   100; // resume once the consumer drains to this depth
+  const LOW_WATER = 100; // resume once the consumer drains to this depth
 
-  const queue   = [];
-  let finished  = false;
+  const queue = [];
+  let finished = false;
   let streamErr = null;
-  let notify    = null;
+  let notify = null;
 
   const push = (item) => {
     queue.push(item);
@@ -49,7 +49,7 @@ async function* streamCsvRows(filePath) {
       // Backpressure: stop reading from disk when the queue is full
       if (queue.length >= HIGH_WATER) fileStream.pause();
     })
-    .on('end',  () => { finished = true; push(null); })
+    .on('end', () => { finished = true; push(null); })
     .on('error', (err) => { streamErr = err; finished = true; push(null); });
 
   while (true) {
@@ -77,18 +77,18 @@ async function* streamCsvRows(filePath) {
 async function* streamXlsxRows(filePath) {
   const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {
     sharedStrings: 'cache',  // required for correct string cell values
-    hyperlinks:    'ignore',
-    styles:        'ignore',
+    hyperlinks: 'ignore',
+    styles: 'ignore',
   });
 
-  let headers    = null;
+  let headers = null;
   let firstSheet = true;
 
   try {
     for await (const worksheetReader of workbookReader) {
       if (!firstSheet) {
         // Drain extra sheets so ExcelJS can close the zip cleanly
-        for await (const _ of worksheetReader) {} // eslint-disable-line no-unused-vars
+        for await (const _ of worksheetReader) { } // eslint-disable-line no-unused-vars
         continue;
       }
       firstSheet = false;
@@ -107,7 +107,7 @@ async function* streamXlsxRows(filePath) {
         }
 
         const rowObj = {};
-        let hasData  = false;
+        let hasData = false;
         headers.forEach((h, idx) => {
           const v = vals[idx + 1];
           const s = cellToString(v);
@@ -128,7 +128,7 @@ async function* streamXlsxRows(filePath) {
  * Yields the same protocol: { _headers } first, then row objects.
  */
 async function* streamXlsRows(filePath) {
-  const workbook  = XLSX.readFile(filePath, { cellDates: true, raw: false });
+  const workbook = XLSX.readFile(filePath, { cellDates: true, raw: false });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error('XLS file contains no sheets.');
 
@@ -142,9 +142,9 @@ async function* streamXlsRows(filePath) {
   yield { _headers: headers };
 
   for (let i = 1; i < rawData.length; i++) {
-    const arr    = rawData[i];
+    const arr = rawData[i];
     const rowObj = {};
-    let hasData  = false;
+    let hasData = false;
     headers.forEach((h, idx) => {
       const v = arr[idx];
       const s = cellToString(v);
@@ -215,7 +215,7 @@ function jsonValueToString(v) {
   if (v === undefined || v === null) return '';
   if (typeof v !== 'object') return String(v);
   // MongoDB Extended JSON — unwrap known single-key wrappers
-  if (v.$oid)  return String(v.$oid);
+  if (v.$oid) return String(v.$oid);
   if (v.$date) return typeof v.$date === 'object' ? String(v.$date.$numberLong ?? JSON.stringify(v.$date)) : String(v.$date);
   if (v.$numberInt || v.$numberLong || v.$numberDouble || v.$numberDecimal) {
     return String(v.$numberInt ?? v.$numberLong ?? v.$numberDouble ?? v.$numberDecimal);
@@ -243,20 +243,20 @@ function createRowStream(filePath, mimetype) {
   }
   const ext = path.extname(filePath).toLowerCase();
 
-  const isCSV  = mimetype === 'text/csv' || mimetype === 'application/csv' || mimetype === 'text/plain' || ext === '.csv';
+  const isCSV = mimetype === 'text/csv' || mimetype === 'application/csv' || mimetype === 'text/plain' || ext === '.csv';
   const isXlsx = mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || ext === '.xlsx';
-  const isXls  = mimetype === 'application/vnd.ms-excel' || ext === '.xls';
+  const isXls = mimetype === 'application/vnd.ms-excel' || ext === '.xls';
   const isJson = mimetype === 'application/json' || mimetype === 'text/json' || ext === '.json';
 
-  if (isCSV)  return streamCsvRows(filePath);
+  if (isCSV) return streamCsvRows(filePath);
   if (isXlsx) return streamXlsxRows(filePath);
-  if (isXls)  return streamXlsRows(filePath);
+  if (isXls) return streamXlsRows(filePath);
   if (isJson) return streamJsonRows(filePath);
 
   // Fallback by extension
-  if (ext === '.csv')  return streamCsvRows(filePath);
+  if (ext === '.csv') return streamCsvRows(filePath);
   if (ext === '.xlsx') return streamXlsxRows(filePath);
-  if (ext === '.xls')  return streamXlsRows(filePath);
+  if (ext === '.xls') return streamXlsRows(filePath);
   if (ext === '.json') return streamJsonRows(filePath);
 
   // Last resort — try xlsx streaming
@@ -276,7 +276,7 @@ async function parseFile(filePath, mimetype) {
   }
 
   const headers = [];
-  const rows    = [];
+  const rows = [];
 
   const gen = createRowStream(filePath, mimetype);
 

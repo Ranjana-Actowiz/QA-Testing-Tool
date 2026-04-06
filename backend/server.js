@@ -4,7 +4,7 @@ const cors = require('cors');
 const compression = require('compression');
 const path = require('path');
 const connectDB = require('./config/db');
-const { startCleanupScheduler } = require('./services/uploadCleanup');
+// const { startCleanupScheduler } = require('./services/uploadCleanup');
 
 
 const app = express();
@@ -12,7 +12,6 @@ const PORT = parseInt(process.env.PORT, 10) || 5000;
 connectDB();
 
 // ----------------------------------------- Middleware ------------------------------------------------------
-// CORS — allow all origins in development; tighten in production via env vars
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()) : '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -55,8 +54,7 @@ app.get('/api/health', (req, res) => {
 // Root endpoint
 app.get('/', (req, res) => {
   res.status(200).json({
-    name: 'QA Tool Backend API Working Fine',
-    version: '1.0.0'
+    name: 'QA Tool Backend API Working Fine'
   });
 });
 
@@ -69,7 +67,6 @@ app.use((req, res) => {
 });
 
 // ---------------------------------------------- Global error handler ------------------------------------------------
-
 //?  eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
@@ -107,9 +104,9 @@ app.use((err, req, res, next) => {
 
 
 const server = app.listen(PORT, "0.0.0.0" , () => {
-  console.log(`QA Tool backend running on http://localhost:${PORT}`);
+  console.log(`QA Tool backend up and running on ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  startCleanupScheduler();
+  // startCleanupScheduler();
 });
 
 

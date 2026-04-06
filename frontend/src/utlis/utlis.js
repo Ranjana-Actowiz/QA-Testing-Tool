@@ -40,7 +40,6 @@ export const DATE_FORMAT_OPTIONS = [
 
 export const modeOpts = [
   { value: 'range', label: 'Min / Max Range' }, { value: 'fix_length', label: 'Exact Length' },
-  { value: 'specific', label: 'Specific Length' },
 ];
 
 export const opts = [

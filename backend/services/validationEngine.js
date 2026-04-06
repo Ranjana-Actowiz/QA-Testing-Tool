@@ -78,71 +78,68 @@ const checkHasEmpty = (value, ruleValue, column) => {
   return null;
 };
 
+// Common date formats tried when data_type includes "date" (no specific format required)
+const DATE_TYPE_FORMATS = [
+  'YYYY-MM-DD', 'DD-MM-YYYY', 'MM-DD-YYYY',
+  'YYYY/MM/DD', 'DD/MM/YYYY', 'MM/DD/YYYY',
+  'YYYY-MM-DDTHH:mm:ss', 'YYYY-MM-DDTHH:mm:ssZ',
+  'DD-MMM-YYYY', 'MMM DD, YYYY', 'MMMM DD, YYYY',
+];
+const isValidDateValue = (v) =>
+  DATE_TYPE_FORMATS.some((fmt) => moment(String(v).trim(), fmt, true).isValid());
+
 /**
  * Rule 2 — data_type
- * Supported types: "str", "int", "float", "bool"
+ * Supported types: "str", "int", "float", "bool", "date" (comma-separated for multi-type OR logic)
+ * e.g. ruleValue = "int,bool" means the value must be int OR bool.
+ *
+ * Type semantics:
+ *   str   — non-numeric string (e.g. "N/A", "Active"; NOT "58" or "3.14")
+ *   int   — whole number, no decimal (e.g. "42", "-7")
+ *   float — decimal number (e.g. "3.14", "-0.5")
+ *   bool  — true/false/1/0/yes/no (case-insensitive)
+ *   date  — matches common date formats (YYYY-MM-DD, DD/MM/YYYY, etc.)
  */
 const checkDataType = (value, ruleValue, column) => {
-  if (isEmpty(value)) return null; // empty handled by has_empty
+  if (value === null || value === undefined || value === '') return null;
 
-  const type = String(ruleValue).toLowerCase().trim();
+  const types = String(ruleValue)
+    .toLowerCase()
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
 
-  switch (type) {
-    case 'str':
-      if (typeof value !== 'string') {
-        return {
-          column,
-          rule: 'data_type',
-          message: `Column "${column}" must be a string.`,
-          value,
-        };
-      }
-      break;
+  const cvStr = String(value).trim();
+  const cvStrLow = cvStr.toLowerCase();
 
-    case 'int': {
-      const strVal = String(value).trim();
-      if (!/^-?\d+$/.test(strVal)) {
-        return {
-          column,
-          rule: 'data_type',
-          message: `Column "${column}" must be an integer. Got: "${value}".`,
-          value,
-        };
-      }
-      break;
+  for (const type of types) {
+    switch (type) {
+      case 'str':
+        if (typeof value === 'string' && isNaN(Number(cvStr))) return null;
+        break;
+      case 'int':
+        if (/^-?\d+$/.test(cvStr)) return null;
+        break;
+      case 'float':
+        if (/^-?\d+\.\d+$/.test(cvStr)) return null;
+        break;
+      case 'bool':
+        if (['true', 'false', '1', '0', 'yes', 'no'].includes(cvStrLow)) return null;
+        break;
+      case 'date':
+        if (isValidDateValue(value)) return null;
+        break;
+      default:
+        continue; // unknown type — skip without contributing pass or fail
     }
-
-    case 'float': {
-      const n = toNumber(value);
-      if (n === null) {
-        return {
-          column,
-          rule: 'data_type',
-          message: `Column "${column}" must be a float/number. Got: "${value}".`,
-          value,
-        };
-      }
-      break;
-    }
-
-    case 'bool': {
-      const boolVals = ['true', 'false', '1', '0', 'yes', 'no'];
-      if (!boolVals.includes(String(value).toLowerCase().trim())) {
-        return {
-          column,
-          rule: 'data_type',
-          message: `Column "${column}" must be a boolean (true/false/1/0/yes/no). Got: "${value}".`,
-          value,
-        };
-      }
-      break;
-    }
-
-    default:
-      // Unknown type — skip
-      break;
   }
-  return null;
+
+  return {
+    column,
+    rule: 'data_type',
+    message: `Column "${column}" must be of type ${types.join(' or ')}. Got: "${value}".`,
+    value,
+  };
 };
 
 /**
@@ -1009,18 +1006,18 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
 
       if (colRules.has_empty !== undefined) {
         c.hasEmptyFail = String(colRules.has_empty).toLowerCase() === 'true';
-        c.smHasEmpty   = sm('has_empty');
+        c.smHasEmpty = sm('has_empty');
       }
       if (colRules.data_type !== undefined) {
-        c.dataType    = String(colRules.data_type).toLowerCase().trim();
-        c.smDataType  = sm('data_type');
+        c.dataTypes = String(colRules.data_type).toLowerCase().split(',').map((t) => t.trim()).filter(Boolean);
+        c.smDataType = sm('data_type');
       }
       if (colRules.data_length !== undefined) {
         const dl = colRules.data_length;
         c.dlSpecific = String(dl.specific).toLowerCase() === 'true';
-        c.dlFixLen   = c.dlSpecific ? parseInt(dl.fix_length, 10) : NaN;
-        c.dlMinLen   = !c.dlSpecific && dl.grater_length !== undefined ? parseInt(dl.grater_length, 10) : NaN;
-        c.dlMaxLen   = !c.dlSpecific && dl.less_length   !== undefined ? parseInt(dl.less_length,   10) : NaN;
+        c.dlFixLen = c.dlSpecific ? parseInt(dl.fix_length, 10) : NaN;
+        c.dlMinLen = !c.dlSpecific && dl.grater_length !== undefined ? parseInt(dl.grater_length, 10) : NaN;
+        c.dlMaxLen = !c.dlSpecific && dl.less_length !== undefined ? parseInt(dl.less_length, 10) : NaN;
         c.smDataLength = sm('data_length');
       }
       if (colRules.depend_header !== undefined) {
@@ -1036,23 +1033,23 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
         });
       }
       if (colRules.data_redundant !== undefined) {
-        c.drTarget        = String(colRules.data_redundant.value || '').trim();
-        c.drFlagKey       = `${column}::${c.drTarget}`;
-        c.drThresholdStr  = colRules.data_redundant.Threshold || colRules.data_redundant.threshold;
+        c.drTarget = String(colRules.data_redundant.value || '').trim();
+        c.drFlagKey = `${column}::${c.drTarget}`;
+        c.drThresholdStr = colRules.data_redundant.Threshold || colRules.data_redundant.threshold;
         c.smDataRedundant = sm('data_redundant');
       }
       if (colRules.greater_than !== undefined) {
-        c.gtThreshold   = Number(colRules.greater_than);
+        c.gtThreshold = Number(colRules.greater_than);
         c.smGreaterThan = sm('greater_than');
       }
       if (colRules.less_than !== undefined) {
         c.ltThreshold = Number(colRules.less_than);
-        c.smLessThan  = sm('less_than');
+        c.smLessThan = sm('less_than');
       }
       if (colRules.in_between !== undefined) {
         const parts = String(colRules.in_between).split(',').map((s) => s.trim());
-        c.ibLower    = parts.length >= 2 ? Number(parts[0]) : NaN;
-        c.ibUpper    = parts.length >= 2 ? Number(parts[1]) : NaN;
+        c.ibLower = parts.length >= 2 ? Number(parts[0]) : NaN;
+        c.ibUpper = parts.length >= 2 ? Number(parts[1]) : NaN;
         c.smInBetween = sm('in_between');
       }
       if (colRules.double_depend !== undefined) {
@@ -1060,8 +1057,8 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
       }
       if (colRules.fix_header !== undefined) {
         c.fixHeaderAllowed = new Set(String(colRules.fix_header).split(',').map((s) => s.trim()));
-        c.fixHeaderLabel   = String(colRules.fix_header);
-        c.smFixHeader      = sm('fix_header');
+        c.fixHeaderLabel = String(colRules.fix_header);
+        c.smFixHeader = sm('fix_header');
       }
       if (colRules.date_format !== undefined) {
         c.momentFormat = pythonToMomentFormat(String(colRules.date_format));
@@ -1071,11 +1068,11 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
         c.smOtherDepend = sm('other_depend');
       }
       if (colRules.not_match_found !== undefined) {
-        c.nmfValue        = String(colRules.not_match_found).trim();
+        c.nmfValue = String(colRules.not_match_found).trim();
         c.smNotMatchFound = sm('not_match_found');
       }
       if (colRules.get_non_ld_indicesc !== undefined) {
-        c.nonLdType  = String(colRules.get_non_ld_indicesc).toLowerCase().trim();
+        c.nonLdType = String(colRules.get_non_ld_indicesc).toLowerCase().trim();
         c.smGetNonLd = sm('get_non_ld_indicesc');
       }
       if (colRules.cell_contains !== undefined) {
@@ -1120,25 +1117,27 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
         } else { c.smHasEmpty.passCount++; }
       }
 
-      // ---- data_type (fully inlined) ----
+      // ---- data_type (fully inlined, multi-type OR logic) ----
       if (c.smDataType) {
         let err = null;
         if (!cvEmpty) {
-          switch (c.dataType) {
-            case 'str':
-              if (typeof cv !== 'string') err = { column, rule: 'data_type', message: `Column "${column}" must be a string.`, value: cv };
-              break;
-            case 'int':
-              if (!/^-?\d+$/.test(String(cv).trim())) err = { column, rule: 'data_type', message: `Column "${column}" must be an integer. Got: "${cv}".`, value: cv };
-              break;
-            case 'float':
-              if (isNaN(Number(cv))) err = { column, rule: 'data_type', message: `Column "${column}" must be a float/number. Got: "${cv}".`, value: cv };
-              break;
-            case 'bool': {
-              const bv = String(cv).toLowerCase().trim();
-              if (!['true','false','1','0','yes','no'].includes(bv)) err = { column, rule: 'data_type', message: `Column "${column}" must be a boolean (true/false/1/0/yes/no). Got: "${cv}".`, value: cv };
-              break;
+          const cvStr = String(cv).trim();
+          const cvStrLow = cvStr.toLowerCase();
+          let passes = false;
+          for (let ti = 0; ti < c.dataTypes.length; ti++) {
+            switch (c.dataTypes[ti]) {
+              case 'str':   if (typeof cv === 'string' && isNaN(Number(cvStr))) passes = true; break;
+              case 'int':   if (/^-?\d+$/.test(cvStr)) passes = true; break;
+              case 'float': if (/^-?\d+\.\d+$/.test(cvStr)) passes = true; break;
+              case 'bool':  if (['true','false','1','0','yes','no'].includes(cvStrLow)) passes = true; break;
+              case 'date':  if (isValidDateValue(cv)) passes = true; break;
+              // unknown types are skipped — they do not contribute a pass
             }
+            if (passes) break;
+          }
+          if (!passes) {
+            const typeList = c.dataTypes.join(' or ');
+            err = { column, rule: 'data_type', message: `Column "${column}" must be of type ${typeList}. Got: "${cv}".`, value: cv };
           }
         }
         if (err) { rowErrors.push(err); c.smDataType.failCount++; } else { c.smDataType.passCount++; }
@@ -1323,10 +1322,10 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
       failedRows++;
       if (results.length < MAX_STORED) {
         const trimmedErrors = rowErrors.slice(0, 20).map((e) => ({
-          column:  e.column  || '',
-          rule:    e.rule    || '',
+          column: e.column || '',
+          rule: e.rule || '',
           message: e.message || '',
-          value:   e.value !== undefined && e.value !== null ? String(e.value).slice(0, 200) : '',
+          value: e.value !== undefined && e.value !== null ? String(e.value).slice(0, 200) : '',
         }));
         results.push({ row_number: rowIdx + 2, status: 'fail', errors: trimmedErrors });
       }

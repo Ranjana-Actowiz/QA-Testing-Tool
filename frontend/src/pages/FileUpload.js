@@ -9,9 +9,7 @@ import { COND_OPTIONS, DATE_FORMAT_OPTIONS, formatFileSize, getFileExtension, ma
 
 
 
-// ---------------------------------------------------------------------------
-// Shared styles (updated with light color variants)
-// ---------------------------------------------------------------------------
+// --------------------------------------  Shared styles (updated with light color variants) ------------------------------------
 const inputCls = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white';
 const labelCls = 'block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5';
 
@@ -25,7 +23,6 @@ const selectStyles = {
     boxShadow: state.isFocused ? '0 0 0 1px #3B82F6' : 'none',
     '&:hover': { borderColor: '#CBD5E1' },
   }),
-
   menu: (base) => ({
     ...base,
     zIndex: 9999,
@@ -35,20 +32,14 @@ const selectStyles = {
     border: '1px solid #E2E8F0',
     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
   }),
-
   menuList: (base) => ({
     ...base,
     backgroundColor: '#FFFFFF',
     padding: '4px',
   }),
-
   option: (base, state) => ({
     ...base,
-    backgroundColor: state.isSelected
-      ? '#EFF6FF'
-      : state.isFocused
-        ? '#F1F5F9'
-        : 'transparent',
+    backgroundColor: state.isSelected ? '#EFF6FF' : state.isFocused ? '#F1F5F9' : 'transparent',
     color: '#1E293B',
     cursor: 'pointer',
     borderRadius: '8px',
@@ -56,36 +47,29 @@ const selectStyles = {
       backgroundColor: '#DBEAFE',
     },
   }),
-
   singleValue: (base) => ({
     ...base,
     color: '#1E293B',
   }),
-
   placeholder: (base) => ({
     ...base,
     color: '#94A3B8',
   }),
-
   dropdownIndicator: (base) => ({
     ...base,
     color: '#64748B',
     '&:hover': { color: '#3B82F6' },
   }),
-
   indicatorSeparator: () => ({
     display: 'none',
   }),
-
   input: (base) => ({
     ...base,
     color: '#1E293B',
   }),
 };
 
-// ---------------------------------------------------------------------------
-// Toggle (unchanged)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------- Toggle (unchanged) -----------------------------------------------
 function Toggle({ checked, onChange, label }) {
   return (
     <div className="flex items-center gap-3">
@@ -98,9 +82,7 @@ function Toggle({ checked, onChange, label }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// RuleFields (unchanged)
-// ---------------------------------------------------------------------------
+// ---------------------------------- RuleFields (unchanged) ------------------------------------------------------
 function RuleFields({ ruleType, value, onChange, columnName, headers = [] }) {
   const update = (key, val) => onChange({ ...value, [key]: val });
 
@@ -117,17 +99,67 @@ function RuleFields({ ruleType, value, onChange, columnName, headers = [] }) {
         </div>
       );
     }
-
     case 'data_type': {
+      // Handle multiple data types selection
+      const selectedTypes = Array.isArray(value.type) ? value.type : (value.type ? [value.type] : ['str']);
+
+      const dataTypeOptions = opts; // Your existing options array
+
+      const handleDataTypeChange = (selectedOptions) => {
+        const types = selectedOptions ? selectedOptions.map(opt => opt.value) : [];
+        update('type', types);
+      };
+
       return (
         <div>
-          <label className={labelCls}>Expected Data Type</label>
-          <Select options={opts} value={opts.find(o => o.value === (value.type || 'str'))}
-            onChange={o => update('type', o.value)} styles={selectStyles} className="text-sm" />
+          <label className={labelCls}>Expected Data Types (multiple allowed)</label>
+          <Select
+            isMulti
+            options={dataTypeOptions}
+            value={dataTypeOptions.filter(opt => selectedTypes.includes(opt.value))}
+            onChange={handleDataTypeChange}
+            styles={{
+              ...selectStyles,
+              control: (base, state) => ({
+                ...base,
+                borderRadius: '12px',
+                borderColor: state.isFocused ? '#3B82F6' : '#E2E8F0',
+                backgroundColor: '#FFFFFF',
+                boxShadow: state.isFocused ? '0 0 0 1px #3B82F6' : 'none',
+                '&:hover': { borderColor: '#CBD5E1' },
+                minHeight: '42px',
+              }),
+              multiValue: (base) => ({
+                ...base,
+                backgroundColor: '#EFF6FF',
+                borderRadius: '8px',
+                padding: '2px 6px',
+              }),
+              multiValueLabel: (base) => ({
+                ...base,
+                color: '#1E40AF',
+                fontSize: '12px',
+                fontWeight: '500',
+              }),
+              multiValueRemove: (base) => ({
+                ...base,
+                color: '#3B82F6',
+                '&:hover': {
+                  backgroundColor: '#DBEAFE',
+                  color: '#1E3A8A',
+                },
+              }),
+            }}
+            className="text-sm"
+            placeholder="Select one or more data types..."
+            noOptionsMessage={() => "No data types available"}
+          />
+          <p className="mt-1.5 text-xs text-slate-400">
+            Select multiple data types that are acceptable for this column.
+          </p>
         </div>
       );
     }
-
     case 'data_length': {
       return (
         <div className="flex flex-col gap-3">
@@ -388,14 +420,20 @@ function RuleFields({ ruleType, value, onChange, columnName, headers = [] }) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// validateRuleConfig — returns an error string or null
-// ---------------------------------------------------------------------------
+// ----------------------------------------------- validateRuleConfig — returns an error string or null ---------------------------------
 function validateRuleConfig(ruleType, config) {
   switch (ruleType) {
     case 'has_empty':
-    case 'data_type':
+      return null; // No config needed, always valid
+    // case 'data_type':
+    //   return null;
+    case 'data_type': {
+      const types = Array.isArray(config.type) ? config.type : (config.type ? [config.type] : ['str']);
+      if (types.length === 0) {
+        return 'Data Type: please select at least one data type.';
+      }
       return null;
+    }
 
     case 'data_length': {
       const mode = config.mode || 'range';
@@ -523,9 +561,7 @@ function validateRuleConfig(ruleType, config) {
   }
 }
 
-// ---------------------------------------------------------------------------
-//!  buildPayload
-// ---------------------------------------------------------------------------
+// ------------------------  buildPayload ----------------------------------------------
 function buildPayload(uploadId, columnRules) {
   const rules = {};
   Object.entries(columnRules).forEach(([col, ruleList]) => {
@@ -534,7 +570,17 @@ function buildPayload(uploadId, columnRules) {
     ruleList.forEach(({ type, config }) => {
       switch (type) {
         case 'has_empty': merged.has_empty = String(config.required !== false); break;
-        case 'data_type': merged.data_type = config.type || 'str'; break;
+        // case 'data_type': merged.data_type = config.type || 'str'; break;
+        case 'data_type': {
+          const types = Array.isArray(config.type) ? config.type : [config.type || 'str'];
+
+          merged.data_type = types
+            .map(t => String(t).toLowerCase().trim())
+            .filter(Boolean)
+            .join(','); // no space (cleaner)
+
+          break;
+        }
         case 'data_length': {
           if (config.mode === 'fix_length' || config.mode === 'specific') {
             merged.data_length = { specific: 'true', fix_length: String(config.length) };
@@ -579,9 +625,7 @@ function buildPayload(uploadId, columnRules) {
   return { uploadId, rules };
 }
 
-// ---------------------------------------------------------------------------
-// Main component – upload always visible, config below
-// ---------------------------------------------------------------------------
+// ---------------------------------------  Main component  ---------------------------------------
 export default function FileUpload() {
   const navigate = useNavigate();
   const rowCountPollRef = useRef(null);
@@ -662,7 +706,6 @@ export default function FileUpload() {
       setSelectedHeader(hdrs[0] || null);
       setColumnRules({});
       toast.success('File uploaded! Now configure your rules.');
-
     } catch (err) {
       const msg = err.displayMessage || 'Upload failed. Please try again.';
       setUploadError(msg);
@@ -725,24 +768,19 @@ export default function FileUpload() {
     }
   };
 
-  const totalRules = useMemo(
-    () => Object.values(columnRules).reduce((s, a) => s + a.length, 0),
+  const totalRules = useMemo(() => Object.values(columnRules).reduce((s, a) => s + a.length, 0),
     [columnRules]
   );
-  const columnsWithRules = useMemo(
-    () => Object.keys(columnRules).filter(k => (columnRules[k] || []).length > 0).length,
+  const columnsWithRules = useMemo(() => Object.keys(columnRules).filter(k => (columnRules[k] || []).length > 0).length,
     [columnRules]
   );
-  const filteredHeaders = useMemo(
-    () => headers.filter(h => h.toLowerCase().includes(searchHeaders.toLowerCase())),
+  const filteredHeaders = useMemo(() => headers.filter(h => h.toLowerCase().includes(searchHeaders.toLowerCase())),
     [headers, searchHeaders]
   );
-  const currentRules = useMemo(
-    () => selectedHeader ? (columnRules[selectedHeader] || []) : [],
+  const currentRules = useMemo(() => selectedHeader ? (columnRules[selectedHeader] || []) : [],
     [selectedHeader, columnRules]
   );
-  const payload = useMemo(
-    () => buildPayload(uploadId, columnRules),
+  const payload = useMemo(() => buildPayload(uploadId, columnRules),
     [uploadId, columnRules]
   );
 
@@ -757,10 +795,7 @@ export default function FileUpload() {
             <span className="text-slate-600 font-medium">Upload File</span>
           ) : (
             <>
-              <button
-                onClick={handleReset}
-                className="font-medium text-[#3F4D67] hover:opacity-75 transition-opacity bg-transparent border-none cursor-pointer p-0 text-sm"
-              >
+              <button onClick={handleReset} className="font-medium text-[#3F4D67] hover:opacity-75 transition-opacity bg-transparent border-none cursor-pointer p-0 text-sm">
                 Upload File
               </button>
               <span className="text-slate-400 px-1">/</span>
@@ -780,7 +815,6 @@ export default function FileUpload() {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden  mt-4">
               {/* Top bar */}
               <div className="h-1 bg-gradient-to-r from-slate-500 via-slate-400 to-slate-400" />
-
               {/* Header */}
               <div className="px-6 pt-3 pb-1 flex items-center justify-between border-b border-slate-100">
                 <div>
@@ -799,9 +833,7 @@ export default function FileUpload() {
                 <div {...getRootProps({
                   className: [
                     'border-2 border-dashed rounded-xl px-6 py-8 text-center cursor-pointer transition-all duration-200 outline-none',
-                    isDragReject ? 'border-red-400 bg-red-50'
-                      : isDragActive ? 'border-[#3F4D67] bg-[#3F4D67]/5'
-                        : 'border-slate-200 hover:border-[#3F4D67]/40 hover:bg-slate-50',
+                    isDragReject ? 'border-red-400 bg-red-50' : isDragActive ? 'border-[#3F4D67] bg-[#3F4D67]/5' : 'border-slate-200 hover:border-[#3F4D67]/40 hover:bg-slate-50',
                   ].join(' '),
                 })}>
                   <input {...getInputProps()} />
@@ -992,9 +1024,7 @@ export default function FileUpload() {
                         <div>
                           <h2 className="text-lg font-black text-slate-800">{selectedHeader}</h2>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            {currentRules.length > 0
-                              ? <><span className="text-blue-600 font-bold">{currentRules.length}</span> rule{currentRules.length !== 1 ? 's' : ''} configured</>
-                              : 'No rules yet — add one below'}
+                            {currentRules.length > 0 ? <><span className="text-blue-600 font-bold">{currentRules.length}</span> rule{currentRules.length !== 1 ? 's' : ''} configured</> : 'No rules yet — add one below'}
                           </p>
                         </div>
                         <button onClick={() => { setAddingRule(true); setNewRuleType('has_empty'); setNewRuleConfig({ required: true }); }}

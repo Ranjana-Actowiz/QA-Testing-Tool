@@ -14,7 +14,6 @@ const ExcelJS = require('exceljs');
 const runValidation = async (req, res) => {
   try {
     const { uploadId, rules } = req.body;
-
     // --- Input validation ---
     if (!uploadId) {
       return res.status(400).json({ success: false, message: 'uploadId is required.' });
@@ -84,11 +83,11 @@ const runValidation = async (req, res) => {
     await report.save();
 
     // --- Clean up: delete the physical file and the upload record ---
-    const filePath = uploadDoc.filePath;
-    await uploadDoc.deleteOne();
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    // const filePath = uploadDoc.filePath;
+    // await uploadDoc.deleteOne();
+    // if (filePath && fs.existsSync(filePath)) {
+    //   fs.unlinkSync(filePath);
+    // }
 
     return res.status(201).json({
       success: true,

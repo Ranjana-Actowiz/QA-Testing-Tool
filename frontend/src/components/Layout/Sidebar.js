@@ -66,42 +66,36 @@ export default function Sidebar() {
                 </div>
                  <div className="flex flex-col leading-tight min-w-0">
                   <span className="text-lg font-extrabold text-white tracking-widest uppercase">Actowiz</span>
-                  <span className="text-[11px] font-semibold tracking-widest uppercase text-white/70">QA TOOL</span>
+                  <span className="text-[11px] font-semibold tracking-widest uppercase text-white text-center">QA TOOL</span>
                 </div>
               </Link>
-              
-              {/* Desktop collapse controls */}
-              {mode === "open" ? (
-                <button
-                  onClick={() => setMode("ready")}
-                  className="hidden lg:flex shrink-0 ml-auto h-9 w-9 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
-                  aria-label="Prepare to collapse"
-                >
-                  {/* ✕ */}
+
+              {/* Desktop collapse/expand button */}
+              <button
+                onClick={() => {
+                  if (mode === "collapsed") {
+                    setMode("open");
+                    setHovered(false);
+                  } else {
+                    setMode("collapsed");
+                    setHovered(false);
+                  }
+                }}
+                className="hidden lg:flex shrink-0 ml-auto h-9 w-9 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
+                aria-label={mode === "collapsed" ? "Pin sidebar open" : "Collapse sidebar"}
+              >
+                {mode === "open" ? (
+                  /* ✕ when expanded */
                   <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    if (mode === "collapsed") {
-                      setMode("open");
-                      setHovered(false);
-                    } else {
-                      setMode("collapsed");
-                      setHovered(false);
-                    }
-                  }}
-                  className="hidden lg:flex shrink-0 ml-auto h-9 w-9 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition bg-transparent border-none cursor-pointer"
-                  aria-label={mode === "collapsed" ? "Pin sidebar open" : "Collapse sidebar"}
-                >
-                  {/* ☰ */}
+                ) : (
+                  /* ☰ when collapsed/hovered */
                   <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
                   </svg>
-                </button>
-              )}
+                )}
+              </button>
 
               {/* Mobile close button */}
               <button
