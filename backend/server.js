@@ -41,6 +41,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ------------  Routes ---------------------------------------------
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/validate', require('./routes/validate'));
+app.use('/api/rules', require('./routes/rules'));
 
 // Health-check endpoint
 app.get('/api/health', (req, res) => {

@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { runValidation, getReport, downloadReport } = require('../controllers/validateController');
+const { runValidation, getReport, downloadReport, listReports } = require('../controllers/validateController');
 
 // POST /api/validate          — Run validation (body: { uploadId, rules })
 router.post('/', runValidation);
+
+// GET /api/validate/reports   — List recent reports (for Load Previous Rules)
+// IMPORTANT: must be declared before /report/:id to avoid :id matching "reports"
+router.get('/reports', listReports);
 
 // ? GET /api/validate/report/:id           — Get a report by ID
 router.get('/report/:id', getReport);

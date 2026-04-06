@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { getReport, getDownloadUrl, getColumnDownloadUrl } from '../services/api';
-import { ChartIcon, CheckCircleIcon, ChevronRightIcon, DatabaseIcon, DownloadIcon, HomeIcon, UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
+import { ChartIcon, CheckCircleIcon, DatabaseIcon, DownloadIcon,  UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
 import { Loader } from '../components/Loader';
 
 /* ------------------------------------------------------------------ ErrorModal ------------------------------------------------------------------ */
@@ -87,9 +87,11 @@ function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
                       <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-slate-200 text-slate-700 uppercase">{group.rule}</span>
                       <span className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-700 border border-rose-200">{group.count} occurrence{group.count !== 1 ? 's' : ''}</span>
                     </div>
-                    {group.values.length > 0 && (
+                    {group.values.filter(v => v !== '' && v !== null && v !== undefined).length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
-                        {group.values.map((v, i) => <span key={i} className="px-2.5 py-0.5 rounded-md text-xs font-mono bg-amber-50 text-amber-800 border border-amber-200">{v}</span>)}
+                        {group.values.filter(v => v !== '' && v !== null && v !== undefined).map((v, i) => (
+                          <span key={i} className="px-2.5 py-0.5 rounded-md text-xs font-mono bg-amber-50 text-amber-800 border border-amber-200">{v}</span>
+                        ))}
                       </div>
                     )}
                     <p className="text-sm text-slate-700 leading-relaxed">{group.message}</p>
@@ -423,14 +425,12 @@ export default function ValidationResults() {
           <div className="px-6 py-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="space-y-2">
               {/* Breadcrumb */}
-              <nav className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
-                <button onClick={() => navigate('/')} className="flex items-center gap-1 hover:text-blue-600 transition-colors">
-                  <HomeIcon size={13} /> Upload
-                </button>
-                <ChevronRightIcon size={12} className="text-slate-300" />
-                <span className="text-[#3F4D67] font-semibold flex items-center gap-1">
-                  <ChartIcon size={13} /> Validation Results
-                </span>
+              <nav className="flex items-center gap-1 text-sm text-slate-500">
+                <Link to="/" className="font-medium text-[#3F4D67] hover:opacity-75 transition-opacity">
+                  Upload File
+                </Link>
+                <span className="text-slate-400 px-1">/</span>
+                <span className="text-slate-600 font-medium">Validation Results</span>
               </nav>
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl font-black text-slate-900 tracking-tight">Validation Report</h1>

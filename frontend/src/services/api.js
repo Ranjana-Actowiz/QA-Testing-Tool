@@ -44,6 +44,12 @@ export const getAllUploads = () => API.get('/upload');
 export const runValidation = (data) => API.post('/validate', data);  //validation check  
 
 export const getReport = (id) => API.get(`/validate/report/${id}`);
+export const listReports = () => API.get('/validate/reports');
+
+// Saved rule sets (feeds)
+export const saveRuleSet = (data) => API.post('/rules/save', data);
+export const listSavedRules = () => API.get('/rules');
+export const deleteSavedRule = (id) => API.delete(`/rules/${id}`);
 
 export const getDownloadUrl = (id) => `${process.env.REACT_APP_API_BASE_URL}/validate/report/${id}/download`;
 export const getColumnDownloadUrl = (id, column) => `${process.env.REACT_APP_API_BASE_URL}/validate/report/${id}/download?column=${encodeURIComponent(column)}`;

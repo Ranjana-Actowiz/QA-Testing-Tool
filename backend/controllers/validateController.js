@@ -363,8 +363,26 @@ const getReport = async (req, res) => {
 };
 
 
+/**
+ * GET /api/validate/reports
+ * Return a lightweight list of past reports for rule-reuse (Load Previous Rules feature).
+ */
+const listReports = async (req, res) => {
+  try {
+    const reports = await ValidationReport.find({}, '_id originalName createdAt totalRows passedRows failedRows rules')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    return res.status(200).json({ success: true, data: reports });
+  } catch (error) {
+    console.error('listReports error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   runValidation,
   getReport,
   downloadReport,
+  listReports,
 };

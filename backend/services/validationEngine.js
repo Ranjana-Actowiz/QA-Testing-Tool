@@ -5,9 +5,7 @@
 
 const moment = require('moment');
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --------------------------------------  Helpers -----------------------------------------------
 
 const isEmpty = (value) => {
   if (value === null || value === undefined) return true;
@@ -285,7 +283,7 @@ const checkDependHeader = (row, ruleValue) => {
  * If the specified value appears in more than Threshold% of all rows for this column, flag all those rows.
  * This rule is evaluated post-pass (aggregate), so it is handled at the engine level.
  */
-// Handled in validateData — see below.
+// Handled in validateData.
 
 /**
  * Rule 6 — greater_than
@@ -677,9 +675,7 @@ const validateData = (rows, headers, rules) => {
     }
   }
 
-  // ------------------------------------------------------------------
-  // Summary tracker: { `${col}::${rule}`: { failCount, passCount } }
-  // ------------------------------------------------------------------
+  // ----------------------------------- Summary tracker: { `${col}::${rule}`: { failCount, passCount } } --------------------------------------
   const summaryMap = {};
 
   const trackSummary = (column, ruleName, passed) => {
@@ -694,9 +690,7 @@ const validateData = (rows, headers, rules) => {
     }
   };
 
-  // ------------------------------------------------------------------
-  // Row-level validation
-  // ------------------------------------------------------------------
+  // -------------------------  Row-level validation -------------------------------------------
   const results = [];
 
   for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
@@ -936,9 +930,7 @@ const validateData = (rows, headers, rules) => {
   };
 };
 
-// ---------------------------------------------------------------------------
-// Streaming validation — for large / GB-scale files
-// ---------------------------------------------------------------------------
+// -------------------- Streaming validation — for large / GB-scale files -------------------------------------------------
 
 /**
  * Validate a file without loading all rows into memory at once.
