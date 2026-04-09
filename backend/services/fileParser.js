@@ -156,11 +156,39 @@ async function* streamXlsRows(filePath) {
 }
 
 /**
+ * Recursively flatten a plain object using dot-notation keys.
+ * Arrays are NOT expanded — they are kept as-is (stringified later by jsonValueToString).
+ * e.g. { a: { b: 1 }, c: [1,2] } → { "a.b": 1, "c": [1,2] }
+ */
+function flattenObject(obj, prefix, result) {
+  prefix = prefix || '';
+  result = result || {};
+  for (const k of Object.keys(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    const v = obj[k];
+    if (v !== null && v !== undefined && typeof v === 'object' && !Array.isArray(v)) {
+      flattenObject(v, key, result);
+    } else {
+      result[key] = v;
+    }
+  }
+  return result;
+}
+
+/**
  * Parse a JSON file and yield rows.
- * Supports two structures:
- *   1. Top-level array:        [{...}, {...}]
- *   2. Object with array value: { "data": [{...}] }  (first key whose value is an array)
- * Headers are derived from the keys of the first object in the array.
+ * Handles all common tabular JSON structures:
+ *   1.  Array of objects:           [{col:val}, ...]  — nested objects auto-flattened
+ *   2.  Array of arrays:            [["h1","h2"], [v1,v2], ...]  (first row = headers)
+ *   3.  Array of primitives:        [v1, v2, ...]  → single "value" column
+ *   4.  Wrapper object + array:     { "data": [{...}] }  (any top-level key)
+ *   5.  Pandas split orient:        { "columns": [...], "data": [[...]] }
+ *   6.  Pandas table orient:        { "schema": { "fields": [{name}] }, "data": [...] }
+ *   7.  Pandas index orient:        { "0": {col:val}, "1": {col:val} }
+ *   8.  Deeply nested:              searches up to 5 levels for the first array
+ *
+ * Nested plain objects are flattened to dot-notation columns automatically.
+ * Arrays within objects are kept as JSON strings.
  */
 async function* streamJsonRows(filePath) {
   const raw = await fs.promises.readFile(filePath, 'utf8');
@@ -171,39 +199,137 @@ async function* streamJsonRows(filePath) {
     throw new Error(`JSON parse error: ${e.message}`);
   }
 
-  // Resolve to an array of row objects
-  let rows;
-  if (Array.isArray(parsed)) {
-    rows = parsed;
-  } else if (parsed && typeof parsed === 'object') {
-    // Find the first key whose value is an array
-    const arrayKey = Object.keys(parsed).find(k => Array.isArray(parsed[k]));
-    if (!arrayKey) throw new Error('JSON file must contain an array of objects at the root or inside a top-level key.');
-    rows = parsed[arrayKey];
-  } else {
-    throw new Error('JSON file must contain an array of objects.');
-  }
-
+  const { headers, rows, isArrayOfArrays } = resolveJsonStructure(parsed);
   if (!rows.length) return;
 
-  if (typeof rows[0] !== 'object' || Array.isArray(rows[0])) {
-    throw new Error('JSON rows must be objects (key-value pairs).');
-  }
-
-  const headers = Object.keys(rows[0]).map(h => String(h).trim());
   yield { _headers: headers };
 
   for (const row of rows) {
     const rowObj = {};
     let hasData = false;
-    headers.forEach(h => {
-      const v = row[h];
-      const s = jsonValueToString(v);
-      rowObj[h] = s;
-      if (s !== '') hasData = true;
-    });
+    if (isArrayOfArrays) {
+      // row is a positional array — map by index
+      headers.forEach((h, idx) => {
+        const s = jsonValueToString(row[idx]);
+        rowObj[h] = s;
+        if (s !== '') hasData = true;
+      });
+    } else {
+      // row is an object — flatten it first, then map by header
+      const flat = flattenObject(row);
+      headers.forEach(h => {
+        const s = jsonValueToString(flat[h]);
+        rowObj[h] = s;
+        if (s !== '') hasData = true;
+      });
+    }
     if (hasData) yield rowObj;
   }
+}
+
+/**
+ * Resolve any JSON value into { headers, rows, isArrayOfArrays }.
+ * isArrayOfArrays=true means each row is a positional array, not a keyed object.
+ */
+function resolveJsonStructure(parsed) {
+  if (Array.isArray(parsed)) return resolveJsonArray(parsed);
+
+  if (parsed && typeof parsed === 'object') {
+    // Pandas split: { columns: [...], data: [[...]] }
+    if (Array.isArray(parsed.columns) && Array.isArray(parsed.data)) {
+      const headers = parsed.columns.map(h => String(h ?? '').trim());
+      const isArrayOfArrays = parsed.data.length > 0 && Array.isArray(parsed.data[0]);
+      return { headers, rows: parsed.data, isArrayOfArrays };
+    }
+
+    // Pandas table: { schema: { fields: [{name}] }, data: [...] }
+    if (parsed.schema && Array.isArray(parsed.schema.fields) && Array.isArray(parsed.data)) {
+      const headers = parsed.schema.fields
+        .filter(f => f.name !== 'index')
+        .map(f => String(f.name ?? '').trim());
+      const isArrayOfArrays = parsed.data.length > 0 && Array.isArray(parsed.data[0]);
+      return { headers, rows: parsed.data, isArrayOfArrays };
+    }
+
+    // Pandas index orient: all values are plain objects → treat as array of objects
+    const topVals = Object.values(parsed);
+    if (
+      topVals.length > 0 &&
+      topVals.every(v => v && typeof v === 'object' && !Array.isArray(v))
+    ) {
+      const headers = [...new Set(topVals.flatMap(r => Object.keys(r)))];
+      return { headers, rows: topVals, isArrayOfArrays: false };
+    }
+
+    // Any top-level key whose value is an array
+    const arrayKey = Object.keys(parsed).find(k => Array.isArray(parsed[k]));
+    if (arrayKey) return resolveJsonArray(parsed[arrayKey]);
+
+    // Deep search — recurse up to 5 levels for the first array
+    const found = findArrayDeep(parsed, 0);
+    if (found) return resolveJsonArray(found);
+
+    throw new Error('JSON file must contain an array of objects or a recognised tabular structure.');
+  }
+
+  throw new Error('JSON file must contain tabular data (array or object).');
+}
+
+function resolveJsonArray(arr) {
+  if (!arr.length) return { headers: [], rows: [], isArrayOfArrays: false };
+
+  const first = arr[0];
+
+  // Array of objects — flatten nested plain objects, collect all unique dot-notation keys
+  if (first !== null && typeof first === 'object' && !Array.isArray(first)) {
+    const headerSet = new Set();
+    // Sample up to 100 rows to discover all keys (handles sparse/varying schemas)
+    const sampleSize = Math.min(arr.length, 100);
+    for (let i = 0; i < sampleSize; i++) {
+      const row = arr[i];
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        const flat = flattenObject(row);
+        for (const k of Object.keys(flat)) headerSet.add(k);
+      }
+    }
+    const headers = [...headerSet].map(h => String(h).trim());
+    return { headers, rows: arr, isArrayOfArrays: false };
+  }
+
+  // Array of arrays
+  if (Array.isArray(first)) {
+    // If the sub-arrays contain objects → it's a grouped/paged structure.
+    // Flatten all inner arrays into one list and re-resolve.
+    const innerFirst = first.find(v => v !== null && v !== undefined);
+    if (innerFirst !== undefined && typeof innerFirst === 'object' && !Array.isArray(innerFirst)) {
+      const allRows = arr.flatMap(inner => Array.isArray(inner) ? inner : [inner]);
+      return resolveJsonArray(allRows);
+    }
+    // Otherwise: first sub-array is the header row, rest are positional data rows
+    const headers = first.map(h => String(h ?? '').trim());
+    return { headers, rows: arr.slice(1), isArrayOfArrays: true };
+  }
+
+  // Array of primitives — single column named "value"
+  return {
+    headers: ['value'],
+    rows: arr.map(v => [v]),
+    isArrayOfArrays: true,
+  };
+}
+
+/** Recursively find the first array nested inside an object, up to maxDepth levels. */
+function findArrayDeep(obj, depth) {
+  if (depth > 5) return null;
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (Array.isArray(val) && val.length > 0) return val;
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const found = findArrayDeep(val, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 /**

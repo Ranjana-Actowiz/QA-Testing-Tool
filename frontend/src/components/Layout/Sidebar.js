@@ -71,7 +71,7 @@ export default function Sidebar() {
                 </div>
                 <div className="flex flex-col leading-tight min-w-0">
                   <span className="text-lg font-extrabold text-white tracking-widest uppercase">Actowiz</span>
-                  <span className="text-[11px] font-semibold tracking-widest uppercase text-white text-center">QA TOOL</span>
+                  <span className="text-xs font-semibold tracking-widest uppercase text-white text-center">QA TOOL</span>
                 </div>
               </Link>
 
@@ -131,7 +131,7 @@ export default function Sidebar() {
                     className={navItemCls(isActive(item.path))}
                   >
                     <span className="text-xl flex-shrink-0">{item.icon}</span>
-                    {expanded && <span className="font-semibold text-[15px]">{item.label}</span>}
+                    {expanded && <span className="font-semibold text-sm">{item.label}</span>}
                   </Link>
                 ))}
               </div>

@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { getReport, getDownloadUrl, getColumnDownloadUrl } from '../services/api';
-import { ChartIcon, CheckCircleIcon, DatabaseIcon, DownloadIcon,  UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
+import { getReport, getDownloadUrl, getColumnDownloadUrl, saveRuleSet, updateRuleSet, listSavedRules } from '../services/api';
+import { ChartIcon, CheckCircleIcon, DatabaseIcon, DownloadIcon, UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
 import { Loader } from '../components/Loader';
+import { parseReportRules } from '../utlis/utlis';
 
 /* ------------------------------------------------------------------ ErrorModal ------------------------------------------------------------------ */
 function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
@@ -51,7 +52,7 @@ function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
             <div className="p-2 bg-white/20 rounded-lg"><XCircleIcon size={20} className="text-white" /></div>
             <div>
               <h3 className="text-lg font-bold text-white">Column Validation Report</h3>
-              <p className="text-sm text-rose-100 font-mono mt-0.5">{columnName}</p>
+              <p className="text-sm text-rose-100 mt-0.5">{columnName}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-white/20 transition-all">
@@ -90,7 +91,7 @@ function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
                     {group.values.filter(v => v !== '' && v !== null && v !== undefined).length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {group.values.filter(v => v !== '' && v !== null && v !== undefined).map((v, i) => (
-                          <span key={i} className="px-2.5 py-0.5 rounded-md text-xs font-mono bg-amber-50 text-amber-800 border border-amber-200">{v}</span>
+                          <span key={i} className="px-2.5 py-0.5 rounded-md text-xs bg-amber-50 text-amber-800 border border-amber-200">{v}</span>
                         ))}
                       </div>
                     )}
@@ -101,7 +102,7 @@ function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
                   <div className="text-xs text-slate-500 mb-2 font-medium">Affected Rows</div>
                   <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
                     {group.rows.map((rowNum, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-100 text-slate-700 border border-slate-200">{rowNum}</span>
+                      <span key={i} className="px-2 py-0.5 rounded-md text-xs bg-slate-100 text-slate-700 border border-slate-200">{rowNum}</span>
                     ))}
                   </div>
                 </div>
@@ -124,90 +125,140 @@ const TABLE_HEADER_BG = '#2c4a6e';
 const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRows, onViewErrors, onExport }) {
   if (!summary || !Array.isArray(summary) || summary.length === 0) return null;
 
-  // Build per-column data from summary + rows
-  const columnOrder = [];
-  const colMap = {};
-
-  summary.forEach(item => {
-    const col = item.column || item.col || '—';
-    const rule = item.rule || 'validation';
-    const failCount = item.failCount ?? item.fail_count ?? 0;
-    const passCount = item.passCount ?? item.pass_count ?? 0;
-
-    if (!colMap[col]) {
-      columnOrder.push(col);
-      colMap[col] = { name: col, rules: [], blankRows: 0, hasEmptyRule: false };
-    }
-
-    colMap[col].rules.push({ rule, failCount, passCount });
-
-    if (rule === 'has_empty') {
-      colMap[col].hasEmptyRule = true;
-      colMap[col].blankRows = failCount;
-    }
-  });
-
-  // Compute per-column AND per-rule fail row IDs from the results array
-  const colFailData = {};
-  columnOrder.forEach(col => { colFailData[col] = { failRowIds: [], byRule: {} }; });
-
-  rows.forEach(row => {
-    const errors = row.errors || row.error_details || [];
-    if (!Array.isArray(errors)) return;
-    const seenColRule = new Set();
-    const seenCol = new Set();
-    errors.forEach(err => {
-      if (typeof err !== 'object') return;
-      const col = err.column || err.field;
-      const rule = err.rule || 'validation';
-      if (!col || !colFailData[col]) return;
-
-      // per-column (unique rows)
-      if (!seenCol.has(col)) {
-        seenCol.add(col);
-        colFailData[col].failRowIds.push(row.row_number);
+  // 1. Derive column order and basic rule info from summary
+  const { columnOrder, colMap } = useMemo(() => {
+    const order = [];
+    const map = {};
+    summary.forEach(item => {
+      const col = item.column || item.col || '—';
+      const rule = item.rule || 'validation';
+      const failCount = item.failCount ?? item.fail_count ?? 0;
+      const passCount = item.passCount ?? item.pass_count ?? 0;
+      if (!map[col]) {
+        order.push(col);
+        map[col] = { name: col, rules: [], blankRows: 0, hasEmptyRule: false };
       }
-      // per-rule (unique rows per rule)
-      const ruleKey = `${col}::${rule}`;
-      if (!seenColRule.has(ruleKey)) {
-        seenColRule.add(ruleKey);
-        if (!colFailData[col].byRule[rule]) colFailData[col].byRule[rule] = [];
-        colFailData[col].byRule[rule].push(row.row_number);
+      map[col].rules.push({ rule, failCount, passCount });
+      if (rule === 'has_empty') {
+        map[col].hasEmptyRule = true;
+        map[col].blankRows = failCount;
       }
     });
-  });
+    return { columnOrder: order, colMap: map };
+  }, [summary]);
 
-  // Build table data for rendering + export
-  const tableData = columnOrder.map((col, idx) => {
-    const data = colMap[col];
-    const failRowIds = colFailData[col]?.failRowIds || [];
-    const byRule = colFailData[col]?.byRule || {};
-    const qcFail = failRowIds.length;
-    const qcPass = totalRows - qcFail;
-    const failPct = totalRows > 0 ? ((qcFail / totalRows) * 100).toFixed(2) : '0.00';
-    const reasons = data.rules.map(r => r.rule);
-    const blankRows = data.hasEmptyRule ? data.blankRows : null;
-    const isPass = qcFail === 0;
+  // 2. Compute per‑column distinct values (unique count)
+  const uniqueStats = useMemo(() => {
+    if (!rows || rows.length === 0 || columnOrder.length === 0) return {};
+    // Initialize a Set for each column
+    const valueSets = {};
+    columnOrder.forEach(col => { valueSets[col] = new Set(); });
 
-    return {
-      id: idx + 1,
-      col,
-      total: totalRows,
-      qcPass,
-      qcFail,
-      blankRows,
-      reasons,
-      isPass,
-      failPct,
-      allRowIds: failRowIds,
-      sampleRowIds: failRowIds.slice(0, 3),
-      hasMoreRowIds: failRowIds.length > 3,
-      rules: data.rules,        // full rule list with failCount
-      byRule,                   // { rule -> [rowIds] } used for TXT export
-    };
-  });
+    for (const row of rows) {
+      // Expect row.data to contain the original cell values
+      const rowData = row.data || row;
+      if (!rowData || typeof rowData !== 'object') continue;
+      for (const col of columnOrder) {
+        const val = rowData[col];
+        // treat null/undefined as a distinct value (string representation)
+        valueSets[col].add(val === undefined || val === null ? '(empty)' : val);
+      }
+    }
 
-  //!  Export all columns' errors as TXT in a single file (used for "Export All" button) 
+    const stats = {};
+    for (const col of columnOrder) {
+      const distinct = valueSets[col].size;
+      //  loops through rows and collects distinct values per column (using row.data or falling back to row itself). It then calculates the unique percentage based on the total number of rows and returns an object with these stats for each column.
+      const uniquePercent = totalRows > 0 ? (distinct / totalRows) * 100 : 0; // !  Calculate unique percentage
+      stats[col] = uniquePercent.toFixed(2);
+    }
+    return stats;
+  }, [rows, columnOrder, totalRows]);
+
+  // 3. Compute failure row IDs per column and per rule
+  const colFailData = useMemo(() => {
+    const failData = {};
+    columnOrder.forEach(col => { failData[col] = { failRowIds: [], byRule: {} }; });
+
+    for (const row of rows) {
+      const errors = row.errors || row.error_details || [];
+      if (!Array.isArray(errors)) continue;
+      const seenColRule = new Set();
+      const seenCol = new Set();
+      for (const err of errors) {
+        if (typeof err !== 'object') continue;
+        const col = err.column || err.field;
+        const rule = err.rule || 'validation';
+        if (!col || !failData[col]) continue;
+
+        if (!seenCol.has(col)) {
+          seenCol.add(col);
+          failData[col].failRowIds.push(row.row_number);
+        }
+        const ruleKey = `${col}::${rule}`;
+        if (!seenColRule.has(ruleKey)) {
+          seenColRule.add(ruleKey);
+          if (!failData[col].byRule[rule]) failData[col].byRule[rule] = [];
+          failData[col].byRule[rule].push(row.row_number);
+        }
+      }
+    }
+    return failData;
+  }, [rows, columnOrder]);
+
+  // 4. Build final table rows
+  const tableData = useMemo(() => {
+    return columnOrder.map((col, idx) => {
+      const data = colMap[col];
+      const failRowIds = colFailData[col]?.failRowIds || [];
+      const byRule = colFailData[col]?.byRule || {};
+      const qcFail = failRowIds.length;
+      const qcPass = totalRows - qcFail;
+      const failPct = totalRows > 0 ? ((qcFail / totalRows) * 100).toFixed(2) : '0.00';
+      const reasons = data.rules.map(r => r.rule);
+      const blankRows = data.hasEmptyRule ? data.blankRows : null;
+      const isPass = qcFail === 0;
+      const uniquePercent = uniqueStats[col] || '0.00';
+
+      return {
+        id: idx + 1,
+        col,
+        total: totalRows,
+        qcPass,
+        qcFail,
+        blankRows,
+        reasons,
+        isPass,
+        failPct,
+        uniquePercent,
+        allRowIds: failRowIds,
+        sampleRowIds: failRowIds.slice(0, 3),
+        hasMoreRowIds: failRowIds.length > 3,
+        rules: data.rules,
+        byRule,
+      };
+    });
+  }, [columnOrder, colMap, colFailData, totalRows, uniqueStats]);
+
+  const handleSingleColumnExport = (row) => {
+    let txt = `Headers  -  ${row.col}\n`;
+    row.rules.forEach(({ rule, failCount }) => {
+      if (failCount > 0) {
+        const ids = (row.byRule[rule] || []).join(', ');
+        txt += `${rule}  ${failCount}  [${ids}]\n`;
+      }
+    });
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${row.col}_validation.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+   //!  Export all columns' errors as TXT in a single file (used for "Export All" button) 
   const handleExportAll = () => {
     let txt = '';
     tableData.forEach((row, i) => {
@@ -234,25 +285,6 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
-  // ! Export a single column's errors as TXT (used for per-row "Export" button)
-  const handleSingleColumnExport = (row) => {
-    let txt = `Headers  -  ${row.col}\n`;
-    row.rules.forEach(({ rule, failCount }) => {
-      if (failCount > 0) {
-        const ids = (row.byRule[rule] || []).join(', ');
-        txt += `${rule}  ${failCount}  [${ids}]\n`;
-      }
-    });
-    const blob = new Blob([txt], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${row.col}_validation.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
 
   return (
     <div>
@@ -261,8 +293,7 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
         <p className="text-xs text-slate-400">
           {tableData.filter(r => !r.isPass).length} column{tableData.filter(r => !r.isPass).length !== 1 ? 's' : ''} with failures
         </p>
-        <button onClick={handleExportAll} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#3F4D67] hover:bg-[#2e3a50] transition-colors shadow-sm"
-        >
+        <button onClick={handleExportAll} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#3F4D67] hover:bg-[#2e3a50] transition-colors shadow-sm">
           <DownloadIcon size={13} />
           Export All as TXT
         </button>
@@ -280,46 +311,36 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
             </tr>
           </thead>
           <tbody>
-            {tableData.map((row, idx) => (
+            {tableData.map(row => (
               <tr key={row.col} className="border-b border-slate-200 hover:brightness-95 transition-all">
-                {/* ID */}
-                <td className="px-4 py-2.5 text-slate-500 font-mono text-xs font-semibold">{row.id}</td>
-                {/* Headers */}
-                <td className="px-4 py-2.5 font-semibold text-slate-800 font-mono whitespace-nowrap">{row.col}</td>
-                {/* Total */}
+                <td className="px-4 py-2.5 text-slate-500 text-xs">{row.id}</td>
+                <td className="px-4 py-2.5 text-slate-800 whitespace-nowrap">{row.col}</td>
                 <td className="px-4 py-2.5 text-slate-700 tabular-nums">{row.total.toLocaleString()}</td>
-                {/* QC Pass */}
-                <td className="px-4 py-2.5 text-emerald-700 font-semibold tabular-nums">{row.qcPass.toLocaleString()}</td>
-                {/* QC Fail */}
-                <td className="px-4 py-2.5 font-semibold tabular-nums" style={{ color: row.qcFail > 0 ? '#dc2626' : '#64748b' }}>
+                <td className="px-4 py-2.5 text-emerald-700 tabular-nums">{row.qcPass.toLocaleString()}</td>
+                <td className="px-4 py-2.5 tabular-nums" style={{ color: row.qcFail > 0 ? '#dc2626' : '#64748b' }}>
                   {row.qcFail.toLocaleString()}
                 </td>
-                {/* Blank Rows */}
                 <td className="px-4 py-2.5 text-slate-500 tabular-nums">
-                  {row.blankRows !== null ? row.blankRows.toLocaleString() : <span className="text-slate-300">-</span>}
+                  {row.blankRows !== null ? row.blankRows.toLocaleString() : <span className="text-slate-300">0</span>}
                 </td>
-                {/* Reasons */}
-                <td className="px-4 py-2.5 text-slate-600 text-xs max-w-[200px]"> {row.reasons.length > 0 ? <span>[{row.reasons.join(', ')}]</span> : <span className="text-slate-300">-</span>}
+                <td className="px-4 py-2.5 text-slate-600 text-xs max-w-[200px]">
+                  {row.reasons.length > 0 ? <span>[{row.reasons.join(', ')}]</span> : <span className="text-slate-300">-</span>}
                 </td>
-                {/* Unique % */}
-                <td className="px-4 py-2.5 text-slate-400 text-xs">
-                  <span className="text-slate-300">-</span>
+                {/* Unique % column - now populated */}
+                <td className="px-4 py-2.5 text-slate-700 tabular-nums text-xs font-medium">
+                  {row.uniquePercent}%
                 </td>
-                {/* Status */}
                 <td className="px-4 py-2.5">
-                  <span className="inline-block px-2.5 py-1 rounded text-xs font-bold text-white whitespace-nowrap" style={{ backgroundColor: row.isPass ? '#16a34a' : '#dc2626' }}   >
+                  <span className="inline-block px-2.5 py-1 rounded text-xs font-bold text-white whitespace-nowrap" style={{ backgroundColor: row.isPass ? '#16a34a' : '#dc2626' }}>
                     {row.isPass ? 'QA Pass' : 'QA Fail'}
                   </span>
                 </td>
-                {/* QC Fail % */}
-                <td className="px-4 py-2.5 tabular-nums font-mono text-xs" style={{ color: row.qcFail > 0 ? '#dc2626' : '#64748b' }}>
-                  {row.failPct}
+                <td className="px-4 py-2.5 tabular-nums text-xs" style={{ color: row.qcFail > 0 ? '#dc2626' : '#64748b' }}>
+                  {row.failPct}%
                 </td>
-                {/* No. of Row ID */}
-                <td className="px-4 py-2.5 font-mono text-xs text-slate-600 max-w-[180px]">
+                <td className="px-4 py-2.5 text-xs text-slate-600 max-w-[180px]">
                   {row.sampleRowIds.length > 0 ? <span>[{row.sampleRowIds.join(', ')}{row.hasMoreRowIds ? '...' : ''}]</span> : <span className="text-slate-300">[]</span>}
                 </td>
-                {/* Actions */}
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-1.5">
                     <button
@@ -349,17 +370,22 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
     </div>
   );
 });
-
 /* ------------------------------------------------------------------ Main Component ------------------------------------------------------------------ */
 export default function ValidationResults() {
   const { reportId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const rulesUnchanged = location.state?.rulesUnchanged === true;
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const filterInitialized = useRef(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedColumnForModal, setSelectedColumnForModal] = useState('');
+  // Save Rules modal
+  const [saveStep, setSaveStep] = useState(null); // null | 'confirm' | 'name'
+  const [feedName, setFeedName] = useState('');
+  const [savingRules, setSavingRules] = useState(false);
 
   useEffect(() => {
     const fetchReport = async () => {
@@ -410,6 +436,30 @@ export default function ValidationResults() {
     document.body.removeChild(link);
   }, [reportId]);
 
+  const handleConfirmSaveRules = async () => {
+    if (!feedName.trim()) { toast.error('Please enter a feed name.'); return; }
+    setSavingRules(true);
+    try {
+      const uiRules = parseReportRules(report.rules || {});
+      const name = feedName.trim();
+      const { data: feedsRes } = await listSavedRules();
+      const existing = (feedsRes?.data || []).find(f => f.feedName === name);
+      if (existing) {
+        await updateRuleSet(existing._id, { rules: uiRules });
+        toast.success(`Feed "${name}" updated successfully!`);
+      } else {
+        await saveRuleSet({ feedName: name, rules: uiRules });
+        toast.success(`Feed "${name}" saved successfully!`);
+      }
+      setSaveStep(null);
+      setFeedName('');
+    } catch (err) {
+      toast.error(err.displayMessage || 'Failed to save rules.');
+    } finally {
+      setSavingRules(false);
+    }
+  };
+
   if (loading) return <Loader />;
   if (!report) return null;
 
@@ -451,14 +501,25 @@ export default function ValidationResults() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {/* <a
-                href={getDownloadUrl(reportId)}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm"
-              >
-                <DownloadIcon size={15} /> Download Report
-              </a> */}
+              {report.rules && Object.keys(report.rules).length > 0 && (
+                <div className="relative group">
+                  <button
+                    onClick={() => !rulesUnchanged && setSaveStep('confirm')}
+                    disabled={rulesUnchanged}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:border-[#3F4D67] hover:text-[#3F4D67] hover:bg-slate-50 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                    </svg>
+                    Save Rules
+                  </button>
+                  {rulesUnchanged && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-xs px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-medium shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                      Rules are unchanged from the imported feed
+                    </div>
+                  )}
+                </div>
+              )}
               <button
                 onClick={() => navigate('/')}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#3F4D67] text-white text-sm font-semibold shadow hover:bg-[#2e3a50] transition-all"
@@ -538,6 +599,71 @@ export default function ValidationResults() {
         rows={rows}
         totalRows={totalRows}
       />
+
+      {/* ── Save Rules Modal ── */}
+      {saveStep !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="h-1 bg-gradient-to-r from-[#3F4D67] to-slate-400" />
+            {saveStep === 'confirm' ? (
+              <div className="p-6">
+                <div className="flex items-start gap-4 mb-5">
+                  <div className="w-10 h-10 rounded-xl bg-[#3F4D67]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#3F4D67" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">Save Rules as Feed?</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Save the validation rules from this report so you can reuse them on future files.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setSaveStep(null)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors bg-white cursor-pointer">
+                    Cancel
+                  </button>
+                  <button onClick={() => setSaveStep('name')} className="flex-1 py-2.5 rounded-xl bg-[#3F4D67] hover:bg-[#344057] text-white text-sm font-semibold transition-colors cursor-pointer border-none">
+                    Continue →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-6">
+                <div className="mb-5">
+                  <h3 className="text-base font-bold text-slate-800 mb-1">Name This Feed</h3>
+                  <p className="text-sm text-slate-500">Enter a descriptive name so you can find these rules later.</p>
+                </div>
+                <div className="mb-5">
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">Feed Name</label>
+                  <input
+                    type="text"
+                    value={feedName}
+                    onChange={e => setFeedName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleConfirmSaveRules()}
+                    placeholder="e.g. Product Catalogue Rules"
+                    className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setSaveStep('confirm')} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors bg-white cursor-pointer">
+                    ← Back
+                  </button>
+                  <button
+                    onClick={handleConfirmSaveRules}
+                    disabled={!feedName.trim() || savingRules}
+                    className="flex-1 py-2.5 rounded-xl bg-[#3F4D67] hover:bg-[#344057] text-white text-sm font-semibold transition-colors cursor-pointer border-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {savingRules ? 'Saving...' : 'Save Feed'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

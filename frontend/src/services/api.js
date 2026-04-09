@@ -48,6 +48,7 @@ export const listReports = () => API.get('/validate/reports');
 
 // Saved rule sets (feeds)
 export const saveRuleSet = (data) => API.post('/rules/save', data);
+export const updateRuleSet = (id, data) => API.put(`/rules/${id}`, data);
 export const listSavedRules = () => API.get('/rules');
 export const deleteSavedRule = (id) => API.delete(`/rules/${id}`);
 

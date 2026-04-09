@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'react-toastify';
@@ -14,8 +14,9 @@ export default function FileUpload() {
   const [progress, setProgress] = useState(0);
   const [uploadError, setUploadError] = useState(null);
 
-
   const onDrop = useCallback((accepted, rejected) => {
+    if (uploading) return; // extra safety
+
     if (rejected.length > 0) {
       toast.error(`File rejected: ${rejected[0].errors?.[0]?.message || 'Invalid file type'}`);
       return;
@@ -25,7 +26,7 @@ export default function FileUpload() {
       setUploadError(null);
       setProgress(0);
     }
-  }, []);
+  }, [uploading]);
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
@@ -37,9 +38,11 @@ export default function FileUpload() {
       'text/json': ['.json'],
     },
     multiple: false,
+    disabled: uploading, // ✅ disable dropzone
   });
 
   const handleReset = () => {
+    if (uploading) return;
     setFile(null);
     setUploadError(null);
     setProgress(0);
@@ -50,8 +53,10 @@ export default function FileUpload() {
     setUploading(true);
     setProgress(0);
     setUploadError(null);
+
     const formData = new FormData();
     formData.append('file', file);
+
     try {
       const res = await uploadFile(formData, pct => setProgress(pct));
       const data = res?.data;
@@ -79,21 +84,40 @@ export default function FileUpload() {
           </div>
           <div className="flex gap-1.5">
             {['.csv', '.xlsx', '.xls', '.json'].map(ext => (
-              <span key={ext} className="bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-semibold text-slate-600">{ext}</span>
+              <span key={ext} className="bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-semibold text-slate-600">
+                {ext}
+              </span>
             ))}
           </div>
         </div>
 
         {/* Dropzone */}
         <div className="p-6">
-          <div {...getRootProps({
-            className: [
-              'border-2 border-dashed rounded-xl px-6 py-8 text-center cursor-pointer transition-all duration-200 outline-none',
-              isDragReject ? 'border-red-400 bg-red-50' : isDragActive ? 'border-[#3F4D67] bg-[#3F4D67]/5' : 'border-slate-200 hover:border-[#3F4D67]/40 hover:bg-slate-50',
-            ].join(' '),
-          })}>
-            <input {...getInputProps()} />
-            {isDragReject ? (
+          <div
+            {...getRootProps({
+              className: [
+                'border-2 border-dashed rounded-xl px-6 py-8 text-center transition-all duration-200 outline-none',
+                uploading
+                  ? 'cursor-not-allowed opacity-50 bg-slate-100' // ✅ disabled UI
+                  : 'cursor-pointer',
+                isDragReject
+                  ? 'border-red-400 bg-red-50'
+                  : isDragActive
+                  ? 'border-[#3F4D67] bg-[#3F4D67]/5'
+                  : 'border-slate-200 hover:border-[#3F4D67]/40 hover:bg-slate-50',
+              ].join(' '),
+            })}
+          >
+            {!uploading && <input {...getInputProps()} />}
+
+            {uploading ? (
+              <div>
+                <div className="w-8 h-8 mx-auto mb-2 rounded-xl bg-slate-300 flex items-center justify-center text-white">
+                  <UploadCloudIcon size={18} />
+                </div>
+                <p className="text-sm font-semibold text-slate-500">Uploading in progress...</p>
+              </div>
+            ) : isDragReject ? (
               <div>
                 <div className="w-10 h-10 mx-auto mb-2 rounded-xl bg-red-100 flex items-center justify-center text-red-500">
                   <XIcon size={18} />
@@ -113,7 +137,7 @@ export default function FileUpload() {
                 <div className="w-8 h-8 mx-auto mb-3 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
                   <UploadCloudIcon size={18} />
                 </div>
-                <p className="text-sm font-semibold text-slate-700 mb-0.5">Drag &amp; drop your file here</p>
+                <p className="text-sm font-semibold text-slate-700 mb-0.5">Drag & Drop Your File Here</p>
                 <p className="text-xs text-slate-400 mb-3">or click to browse</p>
                 <span className="inline-flex items-center gap-1.5 bg-[#3F4D67] hover:bg-[#344057] text-white rounded-lg px-4 py-1.5 text-xs font-semibold transition-colors">
                   Browse Files
@@ -130,9 +154,17 @@ export default function FileUpload() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-slate-800 truncate">{file.name}</div>
-                <div className="text-xs text-slate-400">{formatFileSize(file.size)} &middot; {getFileExtension(file.name)}</div>
+                <div className="text-xs text-slate-400">
+                  {formatFileSize(file.size)} &middot; {getFileExtension(file.name)}
+                </div>
               </div>
-              <button onClick={handleReset} className="text-slate-400 hover:text-red-500 transition-colors border-none bg-transparent cursor-pointer">
+              <button
+                onClick={handleReset}
+                disabled={uploading}
+                className={`text-slate-400 hover:text-red-500 transition-colors border-none bg-transparent ${
+                  uploading ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                }`}
+              >
                 <XIcon size={14} />
               </button>
             </div>

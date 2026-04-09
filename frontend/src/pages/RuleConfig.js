@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import Select from 'react-select';
 import { toast } from 'react-toastify';
-import { runValidation, getUpload, listSavedRules, saveRuleSet, listReports } from '../services/api';
+import { runValidation, getUpload, listSavedRules, saveRuleSet, updateRuleSet, listReports } from '../services/api';
 import { ChevronDownIcon, CodeIcon, ColumnsIcon, DownloadIcon, FileSpreadsheetIcon, PlayIcon, PlusIcon, SearchIcon, UploadCloudIcon, UploadIcon, XIcon } from '../icon/icon';
 import { COND_OPTIONS, DATE_FORMAT_OPTIONS, fmtDate, matchOpts, modeOpts, opts, RULE_TYPES, validateRuleConfig } from '../utlis/utlis';
 
@@ -416,10 +416,18 @@ export default function RuleConfig() {
   const importInputRef = useRef(null);
   const [editingRule, setEditingRule] = useState(null);
   const [editingConfig, setEditingConfig] = useState({});
-  // Save Rules modal — step: null | 'confirm' | 'name'
+  // Save Rules modal — step: null | 'update' | 'confirm' | 'name'
   const [saveStep, setSaveStep] = useState(null);
   const [feedName, setFeedName] = useState('');
   const [savingRules, setSavingRules] = useState(false);
+  // Track which saved feed was loaded so we can offer an overwrite option
+  const [loadedFeed, setLoadedFeed] = useState(null); // { _id, feedName }
+  // Snapshot of rules at the time a feed was loaded — used to detect modifications
+  const loadedFeedSnapshot = useRef(null);
+
+  // Refs for click-outside handling
+  const loadPanelRef = useRef(null);
+  const toggleButtonRef = useRef(null);
 
   //!  Fetch upload metadata on mount
   useEffect(() => {
@@ -447,6 +455,25 @@ export default function RuleConfig() {
       .catch(() => { });
   }, [uploadId, navigate]);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showLoadPanel) return;
+
+    const handleClickOutside = (event) => {
+      if (
+        loadPanelRef.current &&
+        !loadPanelRef.current.contains(event.target) &&
+        toggleButtonRef.current &&
+        !toggleButtonRef.current.contains(event.target)
+      ) {
+        setShowLoadPanel(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showLoadPanel]);
+
   // ? Listen for rules dispatched by Sidebar while on this page
   useEffect(() => {
     const handler = (e) => {
@@ -460,6 +487,7 @@ export default function RuleConfig() {
       }
       if (count === 0) { toast.warning('No matching columns between the loaded rules and this file.'); return; }
       setColumnRules(filtered);
+      setLoadedFeed(null);
       toast.success(`Applied ${count} rule${count !== 1 ? 's' : ''}.`);
     };
     window.addEventListener('qaToolRulesPreloaded', handler);
@@ -513,13 +541,16 @@ export default function RuleConfig() {
   }, []);
 
   const handleRunValidation = async () => {
+    const totalRules = Object.values(columnRules).reduce((s, a) => s + a.length, 0);
     if (totalRules === 0) { toast.warning('Please add at least one validation rule.'); return; }
     setSubmitting(true);
     try {
+      const payload = buildPayload(uploadId, columnRules);
       const res = await runValidation(payload);
       const reportId = res.data?.reportId || res.data?.report_id || res.data?.id;
+      const rulesUnchanged = loadedFeed !== null && JSON.stringify(columnRules) === loadedFeedSnapshot.current;
       toast.success('Validation complete!');
-      navigate(`/results/${reportId}`);
+      navigate(`/results/${reportId}`, { state: { rulesUnchanged } });
     } catch (err) {
       toast.error(err.displayMessage || 'Validation failed. Please try again.');
     } finally {
@@ -536,7 +567,9 @@ export default function RuleConfig() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${filename.replace(/\.[^/.]+$/, '')}_rules.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
     toast.success('Rules exported!');
   }, [filename, columnRules]);
@@ -560,6 +593,7 @@ export default function RuleConfig() {
         }
         if (count === 0) { toast.warning('No matching columns found in this JSON file.'); return; }
         setColumnRules(filtered);
+        setLoadedFeed(null);
         toast.success(`Imported ${count} rule${count !== 1 ? 's' : ''} from JSON.`);
       } catch {
         toast.error('Invalid JSON file.');
@@ -577,7 +611,9 @@ export default function RuleConfig() {
       if (headerSet.has(col) && Array.isArray(rules)) { filtered[col] = rules; count += rules.length; }
     }
     if (count === 0) { toast.warning('No matching columns between this feed and the current file.'); return; }
+    loadedFeedSnapshot.current = JSON.stringify(filtered);
     setColumnRules(filtered);
+    setLoadedFeed({ _id: feed._id, feedName: feed.feedName });
     setShowLoadPanel(false);
     toast.success(`Loaded ${count} rule${count !== 1 ? 's' : ''} from "${feed.feedName}".`);
   }, [headers]);
@@ -593,6 +629,20 @@ export default function RuleConfig() {
       listReports();
     } catch (err) {
       toast.error(err.displayMessage || 'Failed to save rules.');
+    } finally {
+      setSavingRules(false);
+    }
+  };
+
+  const handleUpdateFeed = async () => {
+    if (!loadedFeed?._id) return;
+    setSavingRules(true);
+    try {
+      await updateRuleSet(loadedFeed._id, { rules: columnRules });
+      toast.success(`Feed "${loadedFeed.feedName}" updated successfully!`);
+      setSaveStep(null);
+    } catch (err) {
+      toast.error(err.displayMessage || 'Failed to update rules.');
     } finally {
       setSavingRules(false);
     }
@@ -632,69 +682,70 @@ export default function RuleConfig() {
 
   return (
     <div>
-      {/* Breadcrumb */}
-      <div className="px-2 sm:px-6 pt-4 pb-2">
-        <nav className="flex items-center gap-1 text-sm text-slate-500">
-          <Link to="/" className="font-medium text-[#3F4D67] hover:opacity-75 transition-opacity">
-            Upload File
-          </Link>
-          <span className="text-slate-400 px-1">/</span>
-          <span className="text-slate-600 font-medium">Configure Rules</span>
-        </nav>
-      </div>
-
-      <div className="px-3 sm:px-6 pb-6">
-        {/* Header row */}
-        <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800">Configure Validation Rules</h2>
-            <p className="text-slate-500 text-sm mt-0.5">Add rules to validate your data. Rules are applied per column.</p>
+      <div className="px-3 sm:px-6 pb-6 pt-4">
+        {/* Page Header Card */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6">
+          <div className="h-1 w-full bg-gradient-to-r from-[#3F4D67] via-blue-500 to-cyan-400" />
+          <div className="px-6 py-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div className="space-y-2">
+              {/* Breadcrumb */}
+              <nav className="flex items-center gap-1 text-sm text-slate-500">
+                <Link to="/" className="font-medium text-[#3F4D67] hover:opacity-75 transition-opacity">
+                  Upload File
+                </Link>
+                <span className="text-slate-400 px-1">/</span>
+                <span className="text-slate-600 font-medium">Configure Rules</span>
+              </nav>
+              <h2 className="text-lg font-bold text-slate-800">Configure Validation Rules</h2>
+              <p className="text-slate-500 text-sm">Add rules to validate your data. Rules are applied per column.</p>
+              {/* Filename badge */}
+              <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 w-full">
+                <FileSpreadsheetIcon size={14} className="text-green-500 flex-shrink-0" />
+                <span className="text-sm font-medium text-slate-700 truncate">{filename}</span>
+                <span className="text-xs text-slate-400">
+                  &middot; {totalRows > 0 ? `${totalRows.toLocaleString()} rows` : 'Counting rows…'} &middot; {headers.length} columns
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <Link
+                to="/"
+                className="flex items-center gap-1.5 text-xs font-semibold text-red-400 hover:text-red-700 border border-slate-200 hover:border-red-200 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-2 transition-all"
+              >
+                <UploadCloudIcon size={12} /> Change File
+              </Link>
+              <button onClick={handleRunValidation} disabled={submitting || totalRules === 0}
+                className="btn-primary py-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed justify-center">
+                <PlayIcon size={16} />
+                {submitting ? 'Running...' : 'Run Validation'}
+              </button>
+            </div>
           </div>
-          <button onClick={handleRunValidation} disabled={submitting || totalRules === 0}
-            className="btn-primary py-2.5 px-6 disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto justify-center">
-            <PlayIcon size={16} />
-            {submitting ? 'Running...' : 'Run Validation'}
-          </button>
-        </div>
-
-        {/* File info bar */}
-        <div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-white border border-slate-200 rounded-xl shadow-sm mb-6">
-          <div className="w-7 h-7 rounded-lg bg-green-100 flex items-center justify-center text-green-600 flex-shrink-0">
-            <FileSpreadsheetIcon size={14} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <span className="text-sm font-medium text-slate-800 truncate block">{filename}</span>
-            <span className="text-xs text-slate-400">
-              {totalRows > 0 ? `${totalRows.toLocaleString()} rows` : 'Counting rows…'} &middot; {headers.length} columns
-            </span>
-          </div>
-          <Link
-            to="/"
-            className="flex items-center gap-1.5 text-xs font-semibold text-red-400 hover:text-red-700 border border-slate-200 hover:border-red-200 bg-red-50 hover:bg-red-300 rounded-lg px-2 sm:px-3 py-1.5 transition-all flex-shrink-0"
-          >
-            <UploadCloudIcon size={12} /> <span className="hidden sm:inline">Change File</span>
-          </Link>
         </div>
 
         {/* Rule Reuse Toolbar */}
         <div className="flex flex-wrap items-center gap-2 mb-5">
           {/* Load from previous report */}
-          <div className="relative">
+          <div className="relative ">
             <button
+              ref={toggleButtonRef}
               onClick={() => setShowLoadPanel(p => !p)}
-              className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#3F4D67] border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-lg px-3 py-1.5 transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#3F4D67] border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-lg px-3 py-1.5 transition-all cursor-pointer w-60 max-w-full whitespace-nowrap"
             >
               <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               Load Previous Rules
-              <span className={`transition-transform duration-200 ${showLoadPanel ? 'rotate-180' : ''}`}>
+              <span className={`transition-transform duration-200 ml-12 ${showLoadPanel ? 'rotate-180' : ''}`}>
                 <ChevronDownIcon size={12} />
               </span>
             </button>
 
             {showLoadPanel && (
-              <div className="absolute top-full left-0 mt-1.5 z-50 w-80 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+              <div
+                ref={loadPanelRef}
+                className="absolute top-full left-0 mt-1.5 z-50 w-64 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden"
+              >
                 <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-600 uppercase tracking-wide">Saved Feeds</span>
                   <button onClick={() => setShowLoadPanel(false)} className="text-slate-400 hover:text-slate-600 border-none bg-transparent cursor-pointer p-0">
@@ -707,7 +758,11 @@ export default function RuleConfig() {
                       No saved feeds yet. Use <span className="font-semibold text-slate-500">Save Rules</span> to save a feed.
                     </div>
                   ) : savedFeeds.map(feed => (
-                    <div key={feed._id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 border-b border-slate-50 last:border-b-0">
+                    <div
+                      key={feed._id}
+                      onClick={() => handleLoadSavedFeed(feed)}
+                      className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 border-b border-slate-50 last:border-b-0 cursor-pointer transition-colors"
+                    >
                       <div className="w-7 h-7 rounded-lg bg-[#3F4D67]/10 flex items-center justify-center flex-shrink-0">
                         <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#3F4D67" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -719,12 +774,6 @@ export default function RuleConfig() {
                           {fmtDate(feed.createdAt)} &middot; {feed.totalRules} rule{feed.totalRules !== 1 ? 's' : ''} &middot; {feed.totalColumns} col{feed.totalColumns !== 1 ? 's' : ''}
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleLoadSavedFeed(feed)}
-                        className="flex-shrink-0 text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg px-2.5 py-1 transition-all cursor-pointer"
-                      >
-                        Load
-                      </button>
                     </div>
                   ))}
                 </div>
@@ -734,7 +783,7 @@ export default function RuleConfig() {
 
           {/* Save Rules */}
           <button
-            onClick={() => { if (totalRules > 0) setSaveStep('confirm'); else toast.warning('Add at least one rule before saving.'); }}
+            onClick={() => { if (totalRules > 0) setSaveStep(loadedFeed ? 'update' : 'confirm'); else toast.warning('Add at least one rule before saving.'); }}
             disabled={totalRules === 0}
             className="flex items-center gap-1.5 text-xs font-semibold text-white bg-[#3F4D67] hover:bg-[#344057] border border-[#3F4D67] rounded-lg px-3 py-1.5 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -754,7 +803,7 @@ export default function RuleConfig() {
             Export Rules
           </button>
 
-          {/* Import Rules */}
+          {/* Import Rules (commented out in original) */}
           {/* <button
             onClick={() => importInputRef.current?.click()}
             className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#3F4D67] border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-lg px-3 py-1.5 transition-all cursor-pointer"
@@ -862,7 +911,7 @@ export default function RuleConfig() {
                                   <button onClick={() => handleStartEdit(selectedHeader, idx, rule.config)}
                                     className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors border-none bg-transparent cursor-pointer"
                                     title="Edit rule">
-                                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                                     </svg>
                                   </button>
@@ -1006,7 +1055,46 @@ export default function RuleConfig() {
             {/* Top accent */}
             <div className="h-1 bg-gradient-to-r from-[#3F4D67] to-slate-400" />
 
-            {saveStep === 'confirm' ? (
+            {saveStep === 'update' ? (
+              /* ── Update existing feed ── */
+              <div className="p-6">
+                <div className="flex items-start gap-4 mb-5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#d97706" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">Update Existing Feed?</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      This will overwrite <span className="font-bold text-[#3F4D67]">"{loadedFeed?.feedName}"</span> with your current{' '}
+                      <span className="font-bold text-[#3F4D67]">{totalRules} rule{totalRules !== 1 ? 's' : ''}</span>. This cannot be undone.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setSaveStep(null)}
+                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors bg-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setSaveStep('confirm')}
+                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors bg-white cursor-pointer"
+                  >
+                    Save as New
+                  </button>
+                  <button
+                    onClick={handleUpdateFeed}
+                    disabled={savingRules}
+                    className="flex-1 py-2.5 rounded-xl bg-[#3f4d67] hover:bg-[#344057] text-white text-sm font-semibold transition-colors cursor-pointer border-none disabled:opacity-50"
+                  >
+                    {savingRules ? 'Updating...' : 'Update Feed'}
+                  </button>
+                </div>
+              </div>
+            ) : saveStep === 'confirm' ? (
               /* ── Step 1: Confirmation ── */
               <div className="p-6">
                 <div className="flex items-start gap-4 mb-5">
