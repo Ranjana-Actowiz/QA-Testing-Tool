@@ -54,6 +54,29 @@ const pythonToMomentFormat = (pyFormat) => {
   });
 };
 
+// Common date formats tried when data_type includes "date" (no specific format required).
+const DATE_TYPE_FORMATS = [
+  // ISO with T separator
+  'YYYY-MM-DDTHH:mm:ss.SSSZ',
+  'YYYY-MM-DDTHH:mm:ssZ',
+  'YYYY-MM-DDTHH:mm:ss',
+  'YYYY-MM-DDTHH:mm',
+  'YYYY-MM-DD',
+  // ISO with space separator
+  'YYYY-MM-DD HH:mm:ss.SSSZ',
+  'YYYY-MM-DD HH:mm:ssZ',
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm',
+  // US formats
+  'MM-DD-YYYY', 'MM/DD/YYYY', 'MM-DD-YY', 'MM/DD/YY',
+  // European / Indian formats
+  'DD-MM-YYYY', 'DD/MM/YYYY', 'DD-MM-YY', 'DD/MM/YY',
+  // Year-first with slashes
+  'YYYY/MM/DD', 'YYYY/MM/DD HH:mm:ss', 'YYYY/MM/DD HH:mm',
+];
+const isValidDateValue = (v) => DATE_TYPE_FORMATS.some((fmt) => moment(String(v).trim(), fmt, true).isValid());
+
+
 // ---------------------------------------------------------------------------
 // Individual rule checkers — each returns null (pass) or an error object
 // ---------------------------------------------------------------------------
@@ -76,15 +99,6 @@ const checkHasEmpty = (value, ruleValue, column) => {
   return null;
 };
 
-// Common date formats tried when data_type includes "date" (no specific format required)
-const DATE_TYPE_FORMATS = [
-  'YYYY-MM-DD', 'DD-MM-YYYY', 'MM-DD-YYYY',
-  'YYYY/MM/DD', 'DD/MM/YYYY', 'MM/DD/YYYY',
-  'YYYY-MM-DDTHH:mm:ss', 'YYYY-MM-DDTHH:mm:ssZ',
-  'DD-MMM-YYYY', 'MMM DD, YYYY', 'MMMM DD, YYYY',
-];
-const isValidDateValue = (v) =>
-  DATE_TYPE_FORMATS.some((fmt) => moment(String(v).trim(), fmt, true).isValid());
 
 /**
  * Rule 2 — data_type
@@ -419,17 +433,18 @@ const checkFixHeader = (value, ruleValue, column) => {
 
 /**
  * Rule 11 — date_format
- * e.g. "%Y_%m_%d" (Python strftime) => convert to moment.js format and validate.
+ * Strict match: cell must match the user's chosen format exactly.
  */
 const checkDateFormat = (value, ruleValue, column) => {
   if (isEmpty(value)) return null;
+  const strVal = String(value);
   const momentFormat = pythonToMomentFormat(String(ruleValue));
-  const m = moment(String(value), momentFormat, true); // strict mode
-  if (!m.isValid()) {
+  const valid = moment(strVal, momentFormat, true).isValid();
+  if (!valid) {
     return {
       column,
       rule: 'date_format',
-      message: `Column "${column}" must match date format "${ruleValue}" (moment: "${momentFormat}"). Got: "${value}".`,
+      message: `Column "${column}" must match date format "${momentFormat}". Got: "${value}".`,
       value,
     };
   }
@@ -944,6 +959,8 @@ const validateData = (rows, headers, rules) => {
  *                                    Statistics (totalRows, failedRows) remain exact.
  * @returns {Promise<{ results, summary, totalRows, passedRows, failedRows }>}
  */
+
+
 const validateDataStream = async (createStream, headers, rules, opts = {}) => {
   const MAX_STORED = opts.maxStoredResults ?? 5_000;
 
@@ -1089,11 +1106,30 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
   let failedRows = 0;
   let rowIdx = 0;
 
+  // Track distinct values per column for unique % calculation
+  const uniqueValueSets = {};
+  for (const { column } of compiledRules) {
+    if (!uniqueValueSets[column]) uniqueValueSets[column] = new Set();
+  }
+
+  // Track row signatures across ALL headers for duplicate detection
+  const rowSignatureMap = new Map(); // signature -> occurrence count
+
   for await (const item of createStream()) {
     if (item._headers) continue;
 
     const row = item;
     const rowErrors = [];
+
+    // Build row signature across all headers for duplicate detection
+    const sig = headers.map(h => String(row[h] ?? '')).join('|~|');
+    rowSignatureMap.set(sig, (rowSignatureMap.get(sig) || 0) + 1);
+
+    // Collect distinct values
+    for (const { column } of compiledRules) {
+      const v = row[column];
+      uniqueValueSets[column].add(v === undefined || v === null ? '(empty)' : v);
+    }
 
     for (const c of compiledRules) {
       const { column, colRules } = c;
@@ -1118,11 +1154,11 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
           let passes = false;
           for (let ti = 0; ti < c.dataTypes.length; ti++) {
             switch (c.dataTypes[ti]) {
-              case 'str':   if (typeof cv === 'string' && isNaN(Number(cvStr))) passes = true; break;
-              case 'int':   if (/^-?\d+$/.test(cvStr)) passes = true; break;
+              case 'str': if (typeof cv === 'string' && isNaN(Number(cvStr))) passes = true; break;
+              case 'int': if (/^-?\d+$/.test(cvStr)) passes = true; break;
               case 'float': if (/^-?\d+\.\d+$/.test(cvStr)) passes = true; break;
-              case 'bool':  if (['true','false','1','0','yes','no'].includes(cvStrLow)) passes = true; break;
-              case 'date':  if (isValidDateValue(cv)) passes = true; break;
+              case 'bool': if (['true', 'false', '1', '0', 'yes', 'no'].includes(cvStrLow)) passes = true; break;
+              case 'date': if (isValidDateValue(cv)) passes = true; break;
               // unknown types are skipped — they do not contribute a pass
             }
             if (passes) break;
@@ -1237,13 +1273,13 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
         if (err) { rowErrors.push(err); c.smFixHeader.failCount++; } else { c.smFixHeader.passCount++; }
       }
 
-      // ---- date_format (inlined, pre-converted moment format) ----
+      // ---- date_format (inlined, strict match only) ----
       if (c.smDateFormat) {
         let err = null;
         if (!cvEmpty) {
-          const m = moment(String(cv), c.momentFormat, true);
-          if (!m.isValid())
-            err = { column, rule: 'date_format', message: `Column "${column}" must match date format "${colRules.date_format}" (moment: "${c.momentFormat}"). Got: "${cv}".`, value: cv };
+          const strCv = String(cv);
+          if (!moment(strCv, c.momentFormat, true).isValid())
+            err = { column, rule: 'date_format', message: `Column "${column}" must match date format "${c.momentFormat}". Got: "${cv}".`, value: cv };
         }
         if (err) { rowErrors.push(err); c.smDateFormat.failCount++; } else { c.smDateFormat.passCount++; }
       }
@@ -1325,12 +1361,25 @@ const validateDataStream = async (createStream, headers, rules, opts = {}) => {
     rowIdx++;
   }
 
+  // Attach uniqueCount to each summary entry
+  const summaryWithUnique = Object.values(summaryMap).map((entry) => ({
+    ...entry,
+    uniqueCount: uniqueValueSets[entry.column]?.size ?? 0,
+  }));
+
+  // Count rows that belong to any duplicate group (same full-row signature appears > 1 time)
+  let duplicateRowCount = 0;
+  for (const count of rowSignatureMap.values()) {
+    if (count > 1) duplicateRowCount += count;
+  }
+
   return {
     results,
-    summary: Object.values(summaryMap),
+    summary: summaryWithUnique,
     totalRows,
     passedRows: totalRows - failedRows,
     failedRows,
+    duplicateRowCount,
   };
 };
 

@@ -28,16 +28,6 @@ export const RULE_TYPES = [
   { value: 'depend_header', label: 'Dependent Column', desc: 'Conditional column rules', color: 'bg-slate-100 text-slate-700 border-slate-200' },
 ];
 
-export const DATE_FORMAT_OPTIONS = [
-  { value: 'YYYY-MM-DD', label: 'YYYY-MM-DD' },
-  { value: 'DD-MM-YYYY', label: 'DD-MM-YYYY' },
-  { value: 'MM-DD-YYYY', label: 'MM-DD-YYYY' },
-  { value: 'YYYY/MM/DD', label: 'YYYY/MM/DD' },
-  { value: 'DD/MM/YYYY', label: 'DD/MM/YYYY' },
-  { value: 'MM/DD/YYYY', label: 'MM/DD/YYYY' },
-  { value: '__custom__', label: 'Custom...' },
-];
-
 export const modeOpts = [
   { value: 'range', label: 'Min / Max Range' }, { value: 'fix_length', label: 'Exact Length' },
 ];
@@ -65,7 +55,219 @@ export const getFileExtension = (name) => name?.split('.').pop().toUpperCase() |
 // ── Shared rule-reuse helpers ────────────────────────────────────────────────
 
 const _KNOWN_COND = ['not_empty', 'empty'];
-const _PRESET_DATE_FORMATS = ['YYYY-MM-DD', 'DD-MM-YYYY', 'MM-DD-YYYY', 'YYYY/MM/DD', 'DD/MM/YYYY', 'MM/DD/YYYY'];
+
+// ─── parseDateInput ──────────────────────────────────────────────────────────
+// Accepts either a sample date (e.g. "22-10-2025") OR a moment format token
+// string (e.g. "DD-MM-YYYY"). Returns { format, error }: `format` is the
+// detected moment format string, ready to send to the backend as-is.
+// Ambiguous hyphenated dates resolve to DD-MM-YYYY.
+
+// const _SUPPORTED_FORMATS = [
+//   'YYYY-MM-DDTHH:mm:ss.SSSZ',
+//   'YYYY-MM-DDTHH:mm:ssZ',
+//   'YYYY-MM-DDTHH:mm:ss',
+//   'YYYY-MM-DDTHH:mm',
+//   'YYYY-MM-DD',
+//   'MM-DD-YYYY',
+//   'DD-MM-YYYY',
+//   'DD-MM-YY',
+// ];
+
+
+const _SUPPORTED_FORMATS = [
+  // ISO formats (recommended standard)
+  'YYYY-MM-DDTHH:mm:ss.SSSZ',
+  'YYYY-MM-DDTHH:mm:ssZ',
+  'YYYY-MM-DDTHH:mm:ss',
+  'YYYY-MM-DDTHH:mm',
+  'YYYY-MM-DD',
+
+  // With space instead of T
+  'YYYY-MM-DD HH:mm:ss.SSSZ',
+  'YYYY-MM-DD HH:mm:ssZ',
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm',
+
+  // US formats
+  'MM-DD-YYYY',
+  'MM/DD/YYYY',
+  'MM-DD-YY',
+  'MM/DD/YY',
+
+  // European / Indian formats
+  'DD-MM-YYYY',
+  'DD/MM/YYYY',
+  'DD-MM-YY',
+  'DD/MM/YY',
+
+  // Year first with slashes
+  'YYYY/MM/DD',
+  'YYYY/MM/DD HH:mm:ss',
+  'YYYY/MM/DD HH:mm',
+
+  // Textual month formats
+  // 'DD MMM YYYY',        // 25 Jan 2025
+  // 'DD MMMM YYYY',       // 25 January 2025
+  // 'MMM DD YYYY',        // Jan 25 2025
+  // 'MMMM DD YYYY',       // January 25 2025
+];
+function _validDateParts(y, m, d) {
+  if (m < 1 || m > 12 || d < 1) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+function _validTimeParts(h, mi, s = 0, ms = 0) {
+  return h >= 0 && h < 24 && mi >= 0 && mi < 60 && s >= 0 && s < 60 && ms >= 0 && ms < 1000;
+}
+
+
+export function parseDateInput(raw) {
+  const s = (raw || '').trim();
+  if (!s) return { format: null, error: null };
+
+  // Direct format match
+  if (_SUPPORTED_FORMATS.includes(s)) {
+    return { format: s, error: null };
+  }
+
+  let match;
+
+  // Helper to parse numbers safely
+  const toNums = (arr) => arr.map((x, i) => (i === 0 ? x : parseInt(x, 10)));
+
+  // ───────────────── YYYY-MM-DD WITH T OR SPACE SEPARATOR ─────────────────
+
+  const isoPatterns = [
+    // T-separator (ISO 8601)
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/,
+      format: 'YYYY-MM-DDTHH:mm:ss.SSSZ',
+      validate: ([, y, m, d, h, mi, se, ms]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se, ms),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/,
+      format: 'YYYY-MM-DDTHH:mm:ssZ',
+      validate: ([, y, m, d, h, mi, se]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/,
+      format: 'YYYY-MM-DDTHH:mm:ss',
+      validate: ([, y, m, d, h, mi, se]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/,
+      format: 'YYYY-MM-DDTHH:mm',
+      validate: ([, y, m, d, h, mi]) => _validDateParts(y, m, d) && _validTimeParts(h, mi),
+    },
+    // Space-separator variants (e.g. "2025-07-25 14:30:00")
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/,
+      format: 'YYYY-MM-DD HH:mm:ss.SSSZ',
+      validate: ([, y, m, d, h, mi, se, ms]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se, ms),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})Z$/,
+      format: 'YYYY-MM-DD HH:mm:ssZ',
+      validate: ([, y, m, d, h, mi, se]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/,
+      format: 'YYYY-MM-DD HH:mm:ss',
+      validate: ([, y, m, d, h, mi, se]) => _validDateParts(y, m, d) && _validTimeParts(h, mi, se),
+    },
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/,
+      format: 'YYYY-MM-DD HH:mm',
+      validate: ([, y, m, d, h, mi]) => _validDateParts(y, m, d) && _validTimeParts(h, mi),
+    },
+    // Date only
+    {
+      regex: /^(\d{4})-(\d{2})-(\d{2})$/,
+      format: 'YYYY-MM-DD',
+      validate: ([, y, m, d]) => _validDateParts(y, m, d),
+    },
+  ];
+
+  for (const { regex, format, validate } of isoPatterns) {
+    match = s.match(regex);
+    if (match) {
+      const parts = toNums(match);
+      return validate(parts) ? { format, error: null } : { format: null, error: 'Invalid date: day, month or time out of range.' };
+    }
+  }
+
+  // ───────────────── YYYY/MM/DD (slash, year-first) ─────────────────
+
+  match = s.match(/^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
+  if (match) {
+    const [, y, m, d, h, mi, se] = toNums(match);
+    if (!_validDateParts(y, m, d) || !_validTimeParts(h, mi, se)) return { format: null, error: 'Invalid date: day, month or time out of range.' };
+    return { format: 'YYYY/MM/DD HH:mm:ss', error: null };
+  }
+
+  match = s.match(/^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2})$/);
+  if (match) {
+    const [, y, m, d, h, mi] = toNums(match);
+    if (!_validDateParts(y, m, d) || !_validTimeParts(h, mi)) return { format: null, error: 'Invalid date: day, month or time out of range.' };
+    return { format: 'YYYY/MM/DD HH:mm', error: null };
+  }
+
+  match = s.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (match) {
+    const [, y, m, d] = toNums(match);
+    if (!_validDateParts(y, m, d)) return { format: null, error: 'Invalid date: day or month out of range.' };
+    return { format: 'YYYY/MM/DD', error: null };
+  }
+
+  // ───────────────── LOCAL FORMATS (hyphen) ─────────────────
+
+  // DD-MM-YYYY or MM-DD-YYYY
+  match = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (match) {
+    const [, a, b, y] = toNums(match);
+    if (_validDateParts(y, b, a)) return { format: 'DD-MM-YYYY', error: null };
+    if (_validDateParts(y, a, b)) return { format: 'MM-DD-YYYY', error: null };
+    return { format: null, error: 'Invalid date: day or month out of range.' };
+  }
+
+  // DD-MM-YY or MM-DD-YY
+  match = s.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+  if (match) {
+    const [, a, b, yy] = toNums(match);
+    const y = yy >= 50 ? 1900 + yy : 2000 + yy;
+    if (_validDateParts(y, b, a)) return { format: 'DD-MM-YY', error: null };
+    if (_validDateParts(y, a, b)) return { format: 'MM-DD-YY', error: null };
+    return { format: null, error: 'Invalid date: day or month out of range.' };
+  }
+
+  // ───────────────── LOCAL FORMATS (slash) ─────────────────
+
+  // DD/MM/YYYY or MM/DD/YYYY
+  match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    const [, a, b, y] = toNums(match);
+    if (_validDateParts(y, b, a)) return { format: 'DD/MM/YYYY', error: null };
+    if (_validDateParts(y, a, b)) return { format: 'MM/DD/YYYY', error: null };
+    return { format: null, error: 'Invalid date: day or month out of range.' };
+  }
+
+  // DD/MM/YY or MM/DD/YY
+  match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (match) {
+    const [, a, b, yy] = toNums(match);
+    const y = yy >= 50 ? 1900 + yy : 2000 + yy;
+    if (_validDateParts(y, b, a)) return { format: 'DD/MM/YY', error: null };
+    if (_validDateParts(y, a, b)) return { format: 'MM/DD/YY', error: null };
+    return { format: null, error: 'Invalid date: day or month out of range.' };
+  }
+
+  // ───────────────── FALLBACK ─────────────────
+  return {
+    format: null,
+    error: `Unsupported format. Type a sample date (e.g. 25-07-2025, 25/07/2025, 2025-07-25, 2025-07-25 14:30:00) or paste a format token directly (e.g. DD-MM-YYYY, YYYY/MM/DD).`,
+  };
+}
 
 /**
  * Converts a backend report.rules payload (strftime dates, flat strings)
@@ -105,11 +307,11 @@ export function parseReportRules(reportRules) {
           break;
         }
         case 'date_format': {
-          const fmt = String(val)
-            .replace(/%Y/g, 'YYYY').replace(/%y/g, 'YY')
-            .replace(/%m/g, 'MM').replace(/%d/g, 'DD')
-            .replace(/%H/g, 'HH').replace(/%M/g, 'mm').replace(/%S/g, 'ss');
-          ruleList.push({ type: 'date_format', config: { format: fmt, _customMode: !_PRESET_DATE_FORMATS.includes(fmt) } });
+          // Legacy reports stored strftime tokens (%Y, %m, etc.) — decode back to moment tokens.
+          // New reports store moment tokens directly, so the replace is a no-op.
+          const fmt = String(val).replace(/%Y/g, 'YYYY').replace(/%y/g, 'YY').replace(/%m/g, 'MM').replace(/%d/g, 'DD').replace(/%H/g, 'HH').replace(/%M/g, 'mm').replace(/%S/g, 'ss');
+          // rawInput gets the format itself so the input redisplays cleanly and re-parses to the same format.
+          ruleList.push({ type: 'date_format', config: { rawInput: fmt, format: fmt } });
           break;
         }
         case 'fix_header':
@@ -190,10 +392,8 @@ export function validateRuleConfig(ruleType, config) {
       return null;
     }
     case 'date_format': {
-      const fmt = (config.format || '').trim();
-      if (!fmt) return 'Date Format: please enter a format string.';
-      if (!['YYYY', 'YY', 'MM', 'DD', 'HH', 'mm', 'ss'].some(t => fmt.includes(t)))
-        return 'Date Format: must include a valid token like YYYY, MM, or DD.';
+      if (!config.rawInput?.trim()) return 'Date Format: please enter a sample date or format.';
+      if (!config.format) return 'Date Format: unrecognized — use one of the supported formats.';
       return null;
     }
     case 'fix_header': {

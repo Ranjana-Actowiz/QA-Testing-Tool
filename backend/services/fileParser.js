@@ -5,7 +5,26 @@ const XLSX = require('xlsx');       // kept only for legacy .xls (65k row limit,
 const ExcelJS = require('exceljs'); // streaming reader for .xlsx
 
 
-const cellToString = (v) => (v !== undefined && v !== null ? String(v) : '');
+// date_format rules against the ISO form (type sample `2021-07-26` → YYYY-MM-DD).
+const _formatDateIso = (d) => {
+  const iso = d.toISOString();
+  if (iso.endsWith('T00:00:00.000Z')) return iso.slice(0, 10);
+  return iso;
+};
+
+const cellToString = (v) => {
+  if (v === undefined || v === null) return '';
+  if (v instanceof Date) return _formatDateIso(v);
+  // ExcelJS formula cells: { formula, result } — use the computed result.
+  if (typeof v === 'object') {
+    if (v.result !== undefined && v.result !== null) {
+      return v.result instanceof Date ? _formatDateIso(v.result) : String(v.result);
+    }
+    if (v.text !== undefined && v.text !== null) return String(v.text);
+    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text || '').join('');
+  }
+  return String(v);
+};
 
 // ---------------------------------------------------------------------------
 // Streaming async generators
@@ -78,7 +97,7 @@ async function* streamXlsxRows(filePath) {
   const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {
     sharedStrings: 'cache',  // required for correct string cell values
     hyperlinks: 'ignore',
-    styles: 'ignore',
+    styles: 'cache',         // required so ExcelJS converts date-serial cells into JS Date objects
   });
 
   let headers = null;

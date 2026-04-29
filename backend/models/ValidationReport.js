@@ -27,6 +27,7 @@ const SummaryItemSchema = new mongoose.Schema(
     rule: { type: String },
     failCount: { type: Number, default: 0 },
     passCount: { type: Number, default: 0 },
+    uniqueCount: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -39,6 +40,7 @@ const ValidationReportSchema = new mongoose.Schema(
     totalRows: {  type: Number, default: 0, },
     passedRows: {  type: Number,  default: 0, },
     failedRows: { type: Number, default: 0, },
+    duplicateRowCount: { type: Number, default: 0 },
     rules: { type: mongoose.Schema.Types.Mixed, default: {}, },
     results: {  type: [RowResultSchema], default: [], },
     summary: { type: [SummaryItemSchema], default: [],  },

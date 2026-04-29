@@ -2,125 +2,12 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { getReport, getDownloadUrl, getColumnDownloadUrl, saveRuleSet, updateRuleSet, listSavedRules } from '../services/api';
-import { ChartIcon, CheckCircleIcon, DatabaseIcon, DownloadIcon, UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
+import { ChartIcon, CheckCircleIcon, CopyIcon, DatabaseIcon, DownloadIcon, UploadIcon, XCircleIcon, XIcon } from '../icon/icon';
 import { Loader } from '../components/Loader';
+import { ErrorModal } from '../components/ErrorModal';
 import { parseReportRules } from '../utlis/utlis';
 
-/* ------------------------------------------------------------------ ErrorModal ------------------------------------------------------------------ */
-function ErrorModal({ isOpen, onClose, columnName, rows, totalRows }) {
-  if (!isOpen) return null;
-  const invalidRows = rows.filter(row => {
-    const errors = row.errors || row.error_details || [];
-    if (!Array.isArray(errors)) return false;
-    return errors.some(err => typeof err === 'object' && (err.column || err.field) === columnName);
-  });
-
-  const invalidCount = invalidRows.length;
-  const validCount = totalRows - invalidCount;
-
-  const groupedErrors = {};
-  invalidRows.forEach(row => {
-    const rowNum = row.row_number;
-    const errors = row.errors || row.error_details || [];
-    errors.forEach(err => {
-      if (typeof err === 'object' && (err.column || err.field) === columnName) {
-        const rule = err.rule || err.rule_type || 'validation';
-        const value = (err.value ?? '(empty)').toString();
-        const rawMessage = err.message || err.error || 'Invalid value';
-        const message = rawMessage.replace(/\.\s*Got:\s*"[^"]*"\.?$/, '');
-        const key = rule;
-        if (!groupedErrors[key]) {
-          groupedErrors[key] = { rule, values: [], _valueSet: new Set(), message, rows: [], count: 0 };
-        }
-        if (!groupedErrors[key]._valueSet.has(value)) {
-          groupedErrors[key].values.push(value);
-          groupedErrors[key]._valueSet.add(value);
-        }
-        groupedErrors[key].rows.push(rowNum);
-        groupedErrors[key].count += 1;
-      }
-    });
-  });
-
-  const groupedList = Object.values(groupedErrors);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col border border-slate-200" onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-5 border-b border-rose-50 bg-[#3f4d67] text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-lg"><XCircleIcon size={20} className="text-white" /></div>
-            <div>
-              <h3 className="text-lg font-bold text-white">Column Validation Report</h3>
-              <p className="text-sm text-rose-100 mt-0.5">{columnName}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-white/20 transition-all">
-            <XIcon size={20} className="text-white/90" />
-          </button>
-        </div>
-
-        <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-6 text-sm">
-          <span className="text-slate-500">Total rows: <strong className="text-slate-800">{totalRows}</strong></span>
-          <span className="flex items-center gap-1.5 text-emerald-700 font-semibold"><CheckCircleIcon size={14} className="text-emerald-500" />{validCount} Valid</span>
-          <span className="flex items-center gap-1.5 text-rose-700 font-semibold"><XCircleIcon size={14} className="text-rose-500" />{invalidCount} Invalid</span>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50 space-y-4">
-          {validCount > 0 && (
-            <div className="bg-white rounded-xl border-l-4 border-emerald-500 shadow-sm px-5 py-4 flex items-center gap-3">
-              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700"><CheckCircleIcon size={16} /></div>
-              <span className="text-sm font-semibold text-emerald-800">{validCount} row{validCount !== 1 ? 's' : ''} — VALID</span>
-            </div>
-          )}
-          {groupedList.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
-              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-3"><CheckCircleIcon size={28} className="text-emerald-600" /></div>
-              <p className="text-slate-600 font-medium">No errors found for this column</p>
-            </div>
-          ) : (
-            groupedList.sort((a, b) => b.count - a.count).map((group, idx) => (
-              <div key={idx} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="flex items-start gap-4 p-5 border-l-4 border-rose-500 bg-gradient-to-r from-rose-50/40 to-transparent">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-rose-100 text-rose-700 font-bold text-sm">!</div>
-                  <div className="flex-1 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-slate-200 text-slate-700 uppercase">{group.rule}</span>
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-700 border border-rose-200">{group.count} occurrence{group.count !== 1 ? 's' : ''}</span>
-                    </div>
-                    {group.values.filter(v => v !== '' && v !== null && v !== undefined).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {group.values.filter(v => v !== '' && v !== null && v !== undefined).map((v, i) => (
-                          <span key={i} className="px-2.5 py-0.5 rounded-md text-xs bg-amber-50 text-amber-800 border border-amber-200">{v}</span>
-                        ))}
-                      </div>
-                    )}
-                    <p className="text-sm text-slate-700 leading-relaxed">{group.message}</p>
-                  </div>
-                </div>
-                <div className="px-5 pb-4">
-                  <div className="text-xs text-slate-500 mb-2 font-medium">Affected Rows</div>
-                  <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
-                    {group.rows.map((rowNum, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded-md text-xs bg-slate-100 text-slate-700 border border-slate-200">{rowNum}</span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-        <div className="px-6 py-4 border-t border-slate-200 bg-white flex justify-between items-center">
-          <span className="text-xs text-slate-500">{invalidCount} invalid · {validCount} valid</span>
-          <button onClick={onClose} className="px-5 py-2.5 rounded-lg text-sm font-semibold bg-[#3f4d67] text-white hover:bg-[#0A1935] transition-colors">Close</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ QA Report Table ------------------------------------------------------------------ */
-const TABLE_HEADER_BG = '#2c4a6e';
 
 const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRows, onViewErrors, onExport }) {
   if (!summary || !Array.isArray(summary) || summary.length === 0) return null;
@@ -147,33 +34,20 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
     return { columnOrder: order, colMap: map };
   }, [summary]);
 
-  // 2. Compute per‑column distinct values (unique count)
+  // 2. Compute per-column unique % from summary.uniqueCount
+  // The engine tracks a Set per column during streaming and stores the distinct
+  // count in each summary entry — no need to read row.data here.
   const uniqueStats = useMemo(() => {
-    if (!rows || rows.length === 0 || columnOrder.length === 0) return {};
-    // Initialize a Set for each column
-    const valueSets = {};
-    columnOrder.forEach(col => { valueSets[col] = new Set(); });
-
-    for (const row of rows) {
-      // Expect row.data to contain the original cell values
-      const rowData = row.data || row;
-      if (!rowData || typeof rowData !== 'object') continue;
-      for (const col of columnOrder) {
-        const val = rowData[col];
-        // treat null/undefined as a distinct value (string representation)
-        valueSets[col].add(val === undefined || val === null ? '(empty)' : val);
-      }
-    }
-
+    if (!summary || summary.length === 0 || columnOrder.length === 0) return {};
     const stats = {};
     for (const col of columnOrder) {
-      const distinct = valueSets[col].size;
-      //  loops through rows and collects distinct values per column (using row.data or falling back to row itself). It then calculates the unique percentage based on the total number of rows and returns an object with these stats for each column.
-      const uniquePercent = totalRows > 0 ? (distinct / totalRows) * 100 : 0; // !  Calculate unique percentage
-      stats[col] = uniquePercent.toFixed(2);
+      const entry = summary.find(s => (s.column || s.col) === col);
+      const uniqueCount = entry?.uniqueCount ?? 0;
+      const pct = totalRows > 0 ? (uniqueCount / totalRows) * 100 : 0;
+      stats[col] = pct.toFixed(2);
     }
     return stats;
-  }, [rows, columnOrder, totalRows]);
+  }, [summary, columnOrder, totalRows]);
 
   // 3. Compute failure row IDs per column and per rule
   const colFailData = useMemo(() => {
@@ -214,7 +88,8 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
       const byRule = colFailData[col]?.byRule || {};
       const qcFail = failRowIds.length;
       const qcPass = totalRows - qcFail;
-      const failPct = totalRows > 0 ? ((qcFail / totalRows) * 100).toFixed(2) : '0.00';
+      const rulesWithFailures = data.rules.filter(r => r.failCount > 0).length;
+      const failPct = data.rules.length > 0 ? ((rulesWithFailures / data.rules.length) * 100).toFixed(2) : '0.00';
       const reasons = data.rules.map(r => r.rule);
       const blankRows = data.hasEmptyRule ? data.blankRows : null;
       const isPass = qcFail === 0;
@@ -258,7 +133,7 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
-   //!  Export all columns' errors as TXT in a single file (used for "Export All" button) 
+  //!  Export all columns' errors as TXT in a single file (used for "Export All" button) 
   const handleExportAll = () => {
     let txt = '';
     tableData.forEach((row, i) => {
@@ -302,7 +177,7 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr style={{ backgroundColor: TABLE_HEADER_BG }}>
+            <tr style={{ backgroundColor: '#2c4a6e' }}>
               {['ID', 'Headers', 'Total', 'QC Pass', 'QC Fail', 'Blank Rows', 'Reasons', 'Unique %', 'Status', 'QC Fail %', 'No. of Row ID', 'Actions'].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-bold text-white uppercase tracking-wider whitespace-nowrap border-r border-white/10 last:border-r-0">
                   {h}
@@ -326,7 +201,7 @@ const QAReportTable = React.memo(function QAReportTable({ summary, rows, totalRo
                 <td className="px-4 py-2.5 text-slate-600 text-xs max-w-[200px]">
                   {row.reasons.length > 0 ? <span>[{row.reasons.join(', ')}]</span> : <span className="text-slate-300">-</span>}
                 </td>
-                {/* Unique % column - now populated */}
+                {/* Unique % — from summary.uniqueCount tracked by the engine */}
                 <td className="px-4 py-2.5 text-slate-700 tabular-nums text-xs font-medium">
                   {row.uniquePercent}%
                 </td>
@@ -416,9 +291,18 @@ export default function ValidationResults() {
   }, [report]);
 
   const totalRows = report?.totalRows ?? report?.total_rows ?? rows.length;
-  const passedCount = report?.passedRows ?? report?.passed_rows ?? rows.filter(r => r.status === 'pass' || r.passed === true).length;
-  const failedCount = report?.failedRows ?? report?.failed_rows ?? rows.filter(r => r.status === 'fail' || r.passed === false).length;
+  // const passedCount = report?.passedRows ?? report?.passed_rows ?? rows.filter(r => r.status === 'pass' || r.passed === true).length;
+  // const failedCount = report?.failedRows ?? report?.failed_rows ?? rows.filter(r => r.status === 'fail' || r.passed === false).length;
   const summary = report?.summary || [];
+
+  // Column-based QA stats (used in the summary cards)
+  const uniqueColumns = [...new Set(summary.map(s => s.column || s.col).filter(Boolean))];
+  const totalColumns = uniqueColumns.length;
+  const failingColumns = uniqueColumns.filter(col =>
+    summary.some(s => (s.column || s.col) === col && (s.failCount ?? 0) > 0)
+  ).length;
+  const passingColumns = totalColumns - failingColumns;
+  const duplicateRowCount = report?.duplicateRowCount ?? 0;
   const filename = report?.originalName || report?.uploadId?.originalName || report?.filename || '';
 
   const handleViewColumnModal = useCallback((col) => {
@@ -463,7 +347,8 @@ export default function ValidationResults() {
   if (loading) return <Loader />;
   if (!report) return null;
 
-  const passRate = totalRows > 0 ? Math.round((passedCount / totalRows) * 100) : 0;
+  // const passRate = totalRows > 0 ? Math.round((passedCount / totalRows) * 100) : 0;
+  const passRate = totalColumns > 0 ? Math.round((passingColumns / totalColumns) * 100) : 0;
 
   return (
     <div className=" h-full bg-[#f1f5f9] py-6 px-4 sm:px-6 lg:px-8">
@@ -530,38 +415,51 @@ export default function ValidationResults() {
           </div>
         </div>
 
-        {/* ── Records Summary ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Total */}
+        {/* ── Column Summary Cards ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Total Columns */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-5 flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-slate-100 flex-shrink-0">
               <DatabaseIcon size={20} className="text-slate-500" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Records</p>
-              <p className="text-2xl font-black text-slate-800 tabular-nums leading-tight">{totalRows.toLocaleString()}</p>
+              {/* old: Total Records — totalRows */}
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Columns</p>
+              <p className="text-2xl font-black text-slate-800 tabular-nums leading-tight">{totalColumns.toLocaleString()}</p>
             </div>
           </div>
 
-          {/* Valid */}
+          {/* QA Pass */}
           <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm px-6 py-5 flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-emerald-50 flex-shrink-0">
               <CheckCircleIcon size={20} className="text-emerald-500" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wider">Valid Records</p>
-              <p className="text-2xl font-black text-emerald-600 tabular-nums leading-tight">{passedCount.toLocaleString()}</p>
+              {/* old: Valid Records — passedCount */}
+              <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wider">QA Pass</p>
+              <p className="text-2xl font-black text-emerald-600 tabular-nums leading-tight">{passingColumns.toLocaleString()}</p>
             </div>
           </div>
 
-          {/* Invalid */}
-          <div className={`bg-white rounded-2xl shadow-sm px-6 py-5 flex items-center gap-4 ${failedCount > 0 ? 'border border-rose-200' : 'border border-slate-200'}`}>
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${failedCount > 0 ? 'bg-rose-50' : 'bg-slate-100'}`}>
-              <XCircleIcon size={20} className={failedCount > 0 ? 'text-rose-500' : 'text-slate-400'} />
+          {/* QA Fail */}
+          <div className={`bg-white rounded-2xl shadow-sm px-6 py-5 flex items-center gap-4 ${failingColumns > 0 ? 'border border-rose-200' : 'border border-slate-200'}`}>
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${failingColumns > 0 ? 'bg-rose-50' : 'bg-slate-100'}`}>
+              <XCircleIcon size={20} className={failingColumns > 0 ? 'text-rose-500' : 'text-slate-400'} />
             </div>
             <div>
-              <p className={`text-xs font-semibold uppercase tracking-wider ${failedCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Invalid Records</p>
-              <p className={`text-2xl font-black tabular-nums leading-tight ${failedCount > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{failedCount.toLocaleString()}</p>
+              <p className={`text-xs font-semibold uppercase tracking-wider ${failingColumns > 0 ? 'text-rose-400' : 'text-slate-400'}`}>QA Fail</p>
+              <p className={`text-2xl font-black tabular-nums leading-tight ${failingColumns > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{failingColumns.toLocaleString()}</p>
+            </div>
+          </div>
+
+          {/* Duplicate Rows */}
+          <div className={`bg-white rounded-2xl shadow-sm px-6 py-5 flex items-center gap-4 ${duplicateRowCount > 0 ? 'border border-amber-200' : 'border border-slate-200'}`}>
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${duplicateRowCount > 0 ? 'bg-amber-50' : 'bg-slate-100'}`}>
+              <CopyIcon size={20} className={duplicateRowCount > 0 ? 'text-amber-500' : 'text-slate-400'} />
+            </div>
+            <div>
+              <p className={`text-xs font-semibold uppercase tracking-wider ${duplicateRowCount > 0 ? 'text-amber-500' : 'text-slate-400'}`}>Duplicate Rows</p>
+              <p className={`text-2xl font-black tabular-nums leading-tight ${duplicateRowCount > 0 ? 'text-amber-600' : 'text-slate-400'}`}>{duplicateRowCount.toLocaleString()}</p>
             </div>
           </div>
         </div>

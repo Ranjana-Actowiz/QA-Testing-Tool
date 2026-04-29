@@ -53,7 +53,7 @@ const runValidation = async (req, res) => {
       });
     }
 
-    const { results, summary, totalRows, passedRows, failedRows } = validationResult;
+    const { results, summary, totalRows, passedRows, failedRows, duplicateRowCount } = validationResult;
 
     if (totalRows === 0) {
       return res.status(422).json({
@@ -75,6 +75,7 @@ const runValidation = async (req, res) => {
       totalRows,
       passedRows,
       failedRows,
+      duplicateRowCount: duplicateRowCount ?? 0,
       rules,
       results: storedResults,
       summary,
@@ -97,6 +98,7 @@ const runValidation = async (req, res) => {
       totalRows,
       passedRows,
       failedRows,
+      duplicateRowCount: duplicateRowCount ?? 0,
       summary,
       results,
     });

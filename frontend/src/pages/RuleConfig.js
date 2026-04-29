@@ -4,7 +4,7 @@ import Select from 'react-select';
 import { toast } from 'react-toastify';
 import { runValidation, getUpload, listSavedRules, saveRuleSet, updateRuleSet, listReports } from '../services/api';
 import { ChevronDownIcon, CodeIcon, ColumnsIcon, DownloadIcon, FileSpreadsheetIcon, PlayIcon, PlusIcon, SearchIcon, UploadCloudIcon, UploadIcon, XIcon } from '../icon/icon';
-import { COND_OPTIONS, DATE_FORMAT_OPTIONS, fmtDate, matchOpts, modeOpts, opts, RULE_TYPES, validateRuleConfig } from '../utlis/utlis';
+import { COND_OPTIONS, fmtDate, matchOpts, modeOpts, opts, parseDateInput, RULE_TYPES, validateRuleConfig } from '../utlis/utlis';
 
 // ─── Shared input styles ────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white';
@@ -158,36 +158,34 @@ function RuleFields({ ruleType, value, onChange, columnName, headers = [] }) {
       );
 
     case 'date_format': {
-      const isCustom = value._customMode === true;
-      const dropdownValue = isCustom
-        ? DATE_FORMAT_OPTIONS.find(o => o.value === '__custom__')
-        : (DATE_FORMAT_OPTIONS.find(o => o.value === (value.format || '')) || null);
+      const raw = value.rawInput || '';
+      const parsed = raw.trim() ? parseDateInput(raw) : { format: null, error: null };
       return (
-        <div className="flex flex-col gap-3">
-          <div>
-            <label className={labelCls}>Select Date Format</label>
-            <Select
-              options={DATE_FORMAT_OPTIONS}
-              value={dropdownValue}
-              onChange={(opt) => {
-                if (opt.value === '__custom__') {
-                  onChange({ ...value, _customMode: true, format: '' });
-                } else {
-                  onChange({ ...value, _customMode: false, format: opt.value });
-                }
-              }}
-              styles={selectStyles}
-              placeholder="Choose a format..."
-              className="text-sm"
-            />
-          </div>
-          {isCustom && (
-            <div>
-              <input type="text" className={`${inputCls} font-mono`} value={value.format || ''}
-                placeholder="e.g. YYYY-MM-DD" onChange={e => update('format', e.target.value)} autoFocus />
-              <p className="mt-1.5 text-xs text-slate-400">Tokens: YYYY MM DD HH mm ss</p>
-            </div>
+        <div>
+          <label className={labelCls}>Date Format</label>
+          <input
+            type="text"
+            className={`${inputCls} font-mono`}
+            value={raw}
+            placeholder="e.g. 22-10-2025 or YYYY-MM-DD"
+            onChange={e => {
+              const next = e.target.value;
+              onChange({ rawInput: next, format: parseDateInput(next).format });
+            }}
+          />
+          {raw.trim() && parsed.format && (
+            <p className="mt-1.5 text-xs text-emerald-600 font-mono flex items-start gap-1">
+              <span className="font-sans">✓</span>Detected format: {parsed.format}
+            </p>
           )}
+          {raw.trim() && parsed.error && (
+            <p className="mt-1.5 text-xs text-red-500 flex items-start gap-1">
+              <span>✕</span>{parsed.error}
+            </p>
+          )}
+          <p className="mt-1.5 text-xs text-slate-400">
+            Type a sample date or a format. Supported: YYYY-MM-DDTHH:mm:ss.SSSZ · YYYY-MM-DDTHH:mm:ssZ · YYYY-MM-DDTHH:mm:ss · YYYY-MM-DDTHH:mm · YYYY-MM-DD · MM-DD-YYYY · DD-MM-YYYY · DD-MM-YY
+          </p>
         </div>
       );
     }
@@ -360,14 +358,7 @@ function buildPayload(uploadId, columnRules) {
         case 'greater_than': merged.greater_than = String(config.threshold); break;
         case 'less_than': merged.less_than = String(config.threshold); break;
         case 'in_between': merged.in_between = `${config.min}, ${config.max}`; break;
-        case 'date_format': {
-          const strftime = (config.format || '')
-            .replace(/YYYY/g, '%Y').replace(/YY/g, '%y')
-            .replace(/MM/g, '%m').replace(/DD/g, '%d')
-            .replace(/HH/g, '%H').replace(/mm/g, '%M').replace(/ss/g, '%S');
-          merged.date_format = strftime;
-          break;
-        }
+        case 'date_format': if (config.format) merged.date_format = config.format; break;
         case 'fix_header': merged.fix_header = (config.values || '').split(',').map(v => v.trim()).filter(Boolean).join(', '); break;
         case 'cell_contains': merged.cell_contains = { contains: String(config.contains !== false), value: config.pattern || '' }; break;
         case 'cell_value_start_end_with': merged.cell_value_start_end_with = { start_end_with: 'no', start_with: config.start_with || '', end_with: config.end_with || '' }; break;
@@ -543,6 +534,18 @@ export default function RuleConfig() {
   const handleRunValidation = async () => {
     const totalRules = Object.values(columnRules).reduce((s, a) => s + a.length, 0);
     if (totalRules === 0) { toast.warning('Please add at least one validation rule.'); return; }
+
+    // Validate every rule before sending — catches invalid date_format and other incomplete rules
+    for (const [col, ruleList] of Object.entries(columnRules)) {
+      for (const { type, config } of (ruleList || [])) {
+        const err = validateRuleConfig(type, config);
+        if (err) {
+          toast.error(`Column "${col}": ${err}`);
+          return;
+        }
+      }
+    }
+
     setSubmitting(true);
     try {
       const payload = buildPayload(uploadId, columnRules);
@@ -804,14 +807,14 @@ export default function RuleConfig() {
           </button>
 
           {/* Import Rules (commented out in original) */}
-          {/* <button
+          <button
             onClick={() => importInputRef.current?.click()}
             className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#3F4D67] border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-lg px-3 py-1.5 transition-all cursor-pointer"
           >
             <UploadIcon size={13} />
             Import Rules
-          </button> */}
-          {/* <input ref={importInputRef} type="file" accept=".json" className="hidden" onChange={handleImportRules} /> */}
+          </button>
+          <input ref={importInputRef} type="file" accept=".json" className="hidden" onChange={handleImportRules} />
         </div>
 
         {/* Columns + Rule editor */}
