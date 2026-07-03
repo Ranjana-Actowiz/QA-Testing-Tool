@@ -59,7 +59,7 @@ export default function Sidebar() {
       <aside
         onMouseEnter={() => mode === "collapsed" && setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex flex-col bg-violet-500/70 text-white h-full transition-all duration-300 ease-in-out fixed lg:relative z-50 lg:z-auto ${isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} ${expanded ? "w-64" : "w-16"} overflow-y-auto overflow-x-hidden`}
+        className={`flex flex-col bg-[#3F4D67] text-white h-full transition-all duration-300 ease-in-out fixed lg:relative z-50 lg:z-auto ${isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} ${expanded ? "w-64" : "w-16"} overflow-y-auto overflow-x-hidden`}
       >
         {/* Logo / Branding */}
         <div className={`border-b border-white/10 flex items-center py-4 flex-shrink-0 ${expanded ? "px-5 gap-3" : "justify-center px-2"}`}>
